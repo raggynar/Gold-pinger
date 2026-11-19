@@ -48,6 +48,7 @@ DEFAULT_STATE = {
     "last_watch": None,
     "last_report": None,
     "alerted_events": [],
+    "sent_checkins": [],
 }
 
 BOT_COMMANDS = [
@@ -582,6 +583,64 @@ def detect_upcoming_events(events, state):
     return alerts
 
 
+CHECKIN_TIMES = [
+    ("morning", 7, 30),   # 🇲🇦 07:30
+    ("nyopen", 14, 30),   # 🇲🇦 14:30 (US 9:30am ET)
+    ("evening", 21, 0),   # 🇲🇦 21:00
+]
+
+
+def send_scheduled_checkins(state, m, headlines, events):
+    """Proactive 'speaks first' messages, once per day each, in Morocco time."""
+    now = dt.datetime.now(MA_ZONE) if MA_ZONE else dt.datetime.utcnow()
+    sent = set(state.get("sent_checkins", []))
+    price = m.get("price")
+
+    for name, hour, minute in CHECKIN_TIMES:
+        key = f"{now:%Y-%m-%d}-{name}"
+        if key in sent:
+            continue
+        sched = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if not (0 <= (now - sched).total_seconds() <= 1800):
+            continue
+
+        if name == "morning":
+            top = "\n".join("• " + html.escape(e) for e in events[:5])
+            text = (
+                "🌅 <b>GOOD MORNING</b> 🇲🇦\n\n"
+                f"Gold is at <b>{price}</b> · DXY {m.get('dxy')} · 10Y {m.get('us10y')}%\n\n"
+                + (f"🗓 <b>ON YOUR RADAR TODAY (MA time)</b>\n{top}\n\n" if top else "")
+                + "I'll nudge you at the New York open. Stay sharp. 🟡"
+            )
+        elif name == "nyopen":
+            prev, change = m.get("prev"), None
+            if price and prev:
+                change = (price - prev) / prev * 100
+            text = (
+                "🗽 <b>NEW YORK OPEN IS LIVE</b>\n\n"
+                f"💰 Gold: <b>{price}</b>"
+                + (f" ({change:+.2f}% vs prior hour)" if change is not None else "")
+                + f"\n📊 24h range: {m.get('low24')} – {m.get('high24')}\n\n"
+                + ("📰 " + html.escape(headlines[0]) + "\n\n" if headlines else "")
+                + "I'm watching for red news and sudden drops. 🟡"
+            )
+        else:
+            span = ""
+            if m.get("low24") and m.get("high24"):
+                span = f"\n📊 Today's range: {m['low24']} – {m['high24']}"
+            text = (
+                "🌙 <b>EVENING WRAP</b> 🇲🇦\n\n"
+                f"Gold closed the session around <b>{price}</b>{span}\n\n"
+                + ("📰 " + html.escape(headlines[0]) + "\n\n" if headlines else "")
+                + "I'm still on watch overnight — I'll ping you if anything breaks. Sleep easy. 🟡"
+            )
+
+        if send_telegram(text):
+            sent.add(key)
+            log("sent check-in", name)
+    state["sent_checkins"] = list(sent)[-30:]
+
+
 def send_hourly_report(state, force=False):
     """Send the hourly report, deduped so watch + cron can't double-post."""
     now = dt.datetime.now(dt.timezone.utc)
@@ -634,6 +693,9 @@ def run_watch():
     # The fast watcher drives the hourly report so no long-running job blocks GitHub.
     if dt.datetime.now(dt.timezone.utc).minute >= 7:
         send_hourly_report(state)
+
+    # Proactive 'speaks first' check-ins (Morocco time).
+    send_scheduled_checkins(state, m, headlines, c)
 
     state["last_watch"] = dt.datetime.now(dt.timezone.utc).strftime("%H:%M UTC") + f" / {ma_time('%H:%M')} MA"
     save_state(state)
