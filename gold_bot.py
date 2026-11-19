@@ -49,6 +49,7 @@ DEFAULT_STATE = {
     "last_report": None,
     "alerted_events": [],
     "sent_checkins": [],
+    "checkins_intro_sent": False,
 }
 
 BOT_COMMANDS = [
@@ -595,6 +596,20 @@ def send_scheduled_checkins(state, m, headlines, events):
     now = dt.datetime.now(MA_ZONE) if MA_ZONE else dt.datetime.utcnow()
     sent = set(state.get("sent_checkins", []))
     price = m.get("price")
+
+    if not state.get("checkins_intro_sent"):
+        intro = (
+            "🤖 <b>I'M HERE — I'LL SPEAK FIRST FROM NOW ON</b>\n\n"
+            "🌅 Morning brief · 🇲🇦 <b>07:30</b>\n"
+            "🗽 New York open nudge · 🇲🇦 <b>14:30</b>\n"
+            "🌙 Evening wrap · 🇲🇦 <b>21:00</b>\n"
+            "⏱ Full report · every hour\n"
+            "🚨 RED news / gold drops · instantly\n\n"
+            "You don't have to ask — I'll come to you. 🟡"
+        )
+        if send_telegram(intro):
+            state["checkins_intro_sent"] = True
+            log("sent check-in intro")
 
     for name, hour, minute in CHECKIN_TIMES:
         key = f"{now:%Y-%m-%d}-{name}"
