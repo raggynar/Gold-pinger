@@ -37,13 +37,15 @@ jobs:
         run: python gold_bot.py watch
 
       - name: Save watch state
+        continue-on-error: true
         run: |
           git config user.name "GoldBot"
           git config user.email "goldbot@local"
           git add state.json
           if ! git diff --cached --quiet; then
             git commit -m "update watch state"
-            git push
+            git pull --rebase origin main || true
+            git push || true
           fi
 
       # GitHub's built-in cron is unreliable for new repos, so we chain runs ourselves.
