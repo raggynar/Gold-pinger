@@ -6,17 +6,21 @@ Repo: `https://github.com/raggynar/Gold-pinger`
 
 ## What you get
 
-1. **Hourly report** (at :07 past each hour) — pretty, emoji-formatted, summarized:
+1. **Proactive check-ins** — the bot speaks first, in 🇲🇦 Morocco time:
+   - 🌅 `07:30` morning brief — gold, dollar, yields + today's events
+   - 🗽 `14:30` New York open nudge — price move + top headline
+   - 🌙 `21:00` evening wrap — session range + what I'm watching overnight
+2. **Hourly report** (at :07 past each hour) — pretty, emoji-formatted, summarized:
    - Verdict + conviction bar + horizon
    - 🕒 Times shown in **UTC and Morocco (🇲🇦)** — event times in **GMT (feed native) + Morocco**
    - 📌 Why (macro only — Fed, dollar, yields, geopolitics, central banks — no RSI/SMA jargon)
    - ⚖️ Against · 📈 Path (up-first/down-first with cited levels) · 📅 Next catalyst · 🔁 Flip trigger
    - ⚠️ Active alerts · 🗓 High + **Medium** impact USD events (jobless claims, Philly Fed, PMI, GDP…)
-2. **RED news + event alerts** — the watcher checks every ~90 seconds and pings you when:
+3. **RED news + event alerts** — the watcher checks every ~90 seconds and pings you when:
    - A **new high-impact headline** appears (CPI, PPI, PCE, NFP, Fed, war, tariffs, etc.)
    - **Gold drops ≥0.6%** between checks (or pumps up)
    - An event is **~15 minutes away** (⏰ pre-event heads-up, e.g. Unemployment Claims)
-3. **Commands** — message your bot (menu also shows in Telegram):
+4. **Commands** — message your bot (menu also shows in Telegram):
 
 | Command | What it does |
 |---|---|
