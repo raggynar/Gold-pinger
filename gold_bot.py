@@ -220,10 +220,11 @@ DATA:
                 "Content-Type": "application/json",
             },
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": "openai/gpt-oss-120b",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.2,
-                "max_tokens": 450,
+                "max_tokens": 3000,
+                "reasoning_effort": "low",
             },
             timeout=60,
         )
