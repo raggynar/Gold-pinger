@@ -122,38 +122,47 @@ def rsi(closes, period=14):
     return round(100 - 100 / (1 + avg_gain / avg_loss), 1)
 
 
+def yahoo_closes(symbol):
+    """Lightweight Yahoo chart API — no yfinance/numpy/pandas needed."""
+    from urllib.parse import quote
+    url = "https://query1.finance.yahoo.com/v8/finance/chart/" + quote(symbol, safe="")
+    resp = requests.get(
+        url, params={"range": "10d", "interval": "1h"},
+        headers={"User-Agent": "Mozilla/5.0"}, timeout=20,
+    )
+    resp.raise_for_status()
+    result = resp.json()["chart"]["result"][0]
+    closes = result["indicators"]["quote"][0].get("close", [])
+    return [float(c) for c in closes if c is not None]
+
+
 def fetch_market():
     m = {
         "price": None, "prev": None, "rsi": None, "sma20": None, "sma50": None,
         "low24": None, "high24": None, "dxy": None, "us10y": None, "source": "",
         "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%d %b %Y · %H:%M UTC"),
     }
-    try:
-        import yfinance as yf
-        for sym, key in [("GC=F", "gold"), ("DX-Y.NYB", "dxy"), ("^TNX", "us10y")]:
-            try:
-                df = yf.Ticker(sym).history(period="10d", interval="1h")
-                closes = [float(x) for x in df["Close"].dropna().tolist()]
-                if not closes:
-                    continue
-                if key == "gold":
-                    m["price"] = round(closes[-1], 2)
-                    m["prev"] = round(closes[-2], 2) if len(closes) > 1 else None
-                    m["rsi"] = rsi(closes)
-                    m["sma20"] = round(sum(closes[-20:]) / min(20, len(closes)), 2)
-                    if len(closes) >= 50:
-                        m["sma50"] = round(sum(closes[-50:]) / 50, 2)
-                    m["low24"] = round(min(closes[-24:]), 2)
-                    m["high24"] = round(max(closes[-24:]), 2)
-                    m["source"] = "Yahoo Finance · GC=F 1h"
-                elif key == "dxy":
-                    m["dxy"] = round(closes[-1], 2)
-                else:
-                    m["us10y"] = round(closes[-1], 2)
-            except Exception as exc:
-                log("symbol failed", sym, exc)
-    except Exception as exc:
-        log("yfinance unavailable", exc)
+    for sym, key in [("GC=F", "gold"), ("DX-Y.NYB", "dxy"), ("^TNX", "us10y")]:
+        try:
+            closes = yahoo_closes(sym)
+            if not closes:
+                continue
+            if key == "gold":
+                m["price"] = round(closes[-1], 2)
+                m["prev"] = round(closes[-2], 2) if len(closes) > 1 else None
+                m["rsi"] = rsi(closes)
+                m["sma20"] = round(sum(closes[-20:]) / min(20, len(closes)), 2)
+                if len(closes) >= 50:
+                    m["sma50"] = round(sum(closes[-50:]) / 50, 2)
+                m["low24"] = round(min(closes[-24:]), 2)
+                m["high24"] = round(max(closes[-24:]), 2)
+                m["source"] = "Yahoo Finance · GC=F 1h"
+            elif key == "dxy":
+                m["dxy"] = round(closes[-1], 2)
+            else:
+                m["us10y"] = round(closes[-1], 2)
+        except Exception as exc:
+            log("symbol failed", sym, exc)
 
     if m["price"] is None:
         try:
