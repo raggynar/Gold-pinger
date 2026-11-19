@@ -48,13 +48,13 @@ jobs:
             git push || true
           fi
 
-      # GitHub's built-in cron is unreliable for new repos, so we chain runs ourselves.
-      - name: Chain next run (~80s later)
+      # Fast self-chain so Telegram commands get answered within ~20s.
+      - name: Chain next run (~10s later)
         if: always()
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          sleep 60
+          sleep 10
           curl -sS -X POST \
             -H "Authorization: Bearer $GH_PAT" \
             -H "Accept: application/vnd.github+json" \

@@ -431,7 +431,7 @@ def get_updates(offset):
     return updates
 
 
-def handle_command(text, chat_id, state, m):
+def handle_command(text, chat_id, state, m=None):
     cmd = (text or "").strip().split()[0].lower().split("@")[0]
     if cmd not in ["/gold", "/path", "/alerts", "/on", "/off", "/status", "/help", "/start"]:
         return
@@ -442,6 +442,7 @@ def handle_command(text, chat_id, state, m):
         log("responded", cmd)
 
     elif cmd == "/path":
+        m = m or fetch_market()
         r = ai_struct(data_block(m, fetch_news(), fetch_calendar(), [])) or rules_struct(m)
         msg = (
             "📈 <b>XAUUSD · SHORT-TERM PATH</b>\n\n"
@@ -459,7 +460,7 @@ def handle_command(text, chat_id, state, m):
         send_telegram(
             "⚙️ <b>ALERT SETTINGS</b>\n\n"
             f"RED news + gold moves: <b>{status}</b>\n"
-            "Checks every 5 minutes.\n\n"
+            "Checks every ~20 seconds.\n\n"
             "Use /on or /off to toggle."
         )
 
@@ -472,6 +473,7 @@ def handle_command(text, chat_id, state, m):
         send_telegram("🔴 <b>ALERTS OFF</b> — only hourly reports and manual /gold will send.")
 
     elif cmd == "/status":
+        m = m or fetch_market()
         last = state.get("last_watch") or "never"
         price = m.get("price")
         if MA_ZONE:
@@ -602,14 +604,15 @@ def run_watch():
         set_bot_commands()
         state["commands_set"] = True
 
+    # Poll commands FIRST so replies are not delayed by market/news fetches.
+    updates = get_updates(state.get("last_update_id", 0))
+    for update_id, chat_id, text in updates:
+        handle_command(text, chat_id, state)
+        state["last_update_id"] = max(state.get("last_update_id", 0), update_id + 1)
+
     m = fetch_market()
     headlines = fetch_news()
     c = fetch_calendar()
-
-    updates = get_updates(state.get("last_update_id", 0))
-    for update_id, chat_id, text in updates:
-        handle_command(text, chat_id, state, m)
-        state["last_update_id"] = max(state.get("last_update_id", 0), update_id + 1)
 
     if state.get("alerts_enabled", True):
         for alert in detect_new_red(m, headlines, state):
