@@ -69,9 +69,8 @@ MA_ZONE = None
 try:
     from zoneinfo import ZoneInfo as _ZoneInfo
     MA_ZONE = _ZoneInfo("Africa/Casablanca")
-    ET_ZONE = _ZoneInfo("America/New_York")
 except Exception:
-    ET_ZONE = None
+    pass
 
 
 def ma_time(fmt="%d %b %Y · %H:%M"):
@@ -82,14 +81,14 @@ def ma_time(fmt="%d %b %Y · %H:%M"):
 
 
 def event_time_ma(date_txt, time_txt):
-    """Convert a ForexFactory ET event time to Morocco time. Returns 'MM-DD HH:MMMA'."""
-    if not MA_ZONE or not ET_ZONE:
+    """Convert a ForexFactory GMT event time to Morocco time. Returns 'MM-DD HH:MM'."""
+    if not MA_ZONE:
         return None
     try:
         day = dt.datetime.strptime(date_txt.strip(), "%m-%d-%Y").date()
         clock = dt.datetime.strptime(time_txt.strip().upper(), "%I:%M%p").time()
-        when_et = dt.datetime.combine(day, clock, tzinfo=ET_ZONE)
-        return when_et.astimezone(MA_ZONE).strftime("%m-%d %H:%M")
+        when_gmt = dt.datetime.combine(day, clock, tzinfo=dt.timezone.utc)
+        return when_gmt.astimezone(MA_ZONE).strftime("%m-%d %H:%M")
     except Exception:
         return None
 
@@ -217,7 +216,7 @@ def fetch_calendar():
                 pass
             impact_label = "🔴 HIGH" if (ev.findtext("impact") or "").lower() == "high" else "🟠 MED"
             ma = event_time_ma(date_txt, time_txt)
-            when = f"{date_txt} {time_txt} ET" + (f"  |  🇲🇦 {ma} MA" if ma else "")
+            when = f"{date_txt} {time_txt} GMT" + (f"  |  🇲🇦 {ma} MA" if ma else "")
             events.append(f"{impact_label} · {when} — {title}")
         events = list(dict.fromkeys(events))[:8]
     except Exception as exc:
@@ -542,31 +541,26 @@ def detect_new_red(m, headlines, state):
 
 
 def detect_upcoming_events(events, state):
-    """Ping ~15 min before a HIGH/MED USD event. Events look like:
-    '🔴 HIGH · 11-19-2026 8:30am ET — Initial Jobless Claims'"""
-    try:
-        from zoneinfo import ZoneInfo
-        et = ZoneInfo("America/New_York")
-    except Exception:
-        return []
-    now = dt.datetime.now(et)
+    """Ping ~15 min before a HIGH/MED USD event. ForexFactory feed times are GMT.
+    Events look like: '🔴 HIGH · 11-19-2026 1:30pm GMT | 🇲🇦 11-19 13:30 MA — Claims'"""
+    now = dt.datetime.now(dt.timezone.utc)
     alerted = set(state.get("alerted_events", []))
     alerts = []
     for ev in events:
         if ev in alerted:
             continue
-        match = re.search(r"(\d{2}-\d{2}-\d{4})\s+(\d{1,2}:\d{2}[ap]m)\s+ET", ev)
+        match = re.search(r"(\d{2}-\d{2}-\d{4})\s+(\d{1,2}:\d{2}[ap]m)\s+GMT", ev)
         if not match:
             continue
         try:
             day = dt.datetime.strptime(match.group(1), "%m-%d-%Y").date()
             clock = dt.datetime.strptime(match.group(2).upper(), "%I:%M%p").time()
-            when = dt.datetime.combine(day, clock, tzinfo=et)
+            when = dt.datetime.combine(day, clock, tzinfo=dt.timezone.utc)
         except Exception:
             continue
         minutes = (when - now).total_seconds() / 60
         if 0 <= minutes <= 15:
-            clean = html.escape(ev.replace(" ET", ""))
+            clean = html.escape(ev.replace(" GMT", ""))
             alerts.append(
                 "⏰ <b>EVENT IN ~15 MIN</b> ⏰\n\n"
                 f"{clean}\n\n"
