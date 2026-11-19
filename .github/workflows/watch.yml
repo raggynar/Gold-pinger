@@ -1,0 +1,47 @@
+name: Gold Watch - RED alerts + commands
+
+on:
+  schedule:
+    # Every 5 minutes. Checks Telegram commands + new RED news + gold drops.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: gold-watch
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run watcher
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python gold_bot.py watch
+
+      - name: Save watch state
+        run: |
+          git config user.name "GoldBot"
+          git config user.email "goldbot@local"
+          git add state.json
+          if ! git diff --cached --quiet; then
+            git commit -m "update watch state"
+            git push
+          fi
