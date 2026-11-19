@@ -46,6 +46,8 @@ DEFAULT_STATE = {
     "alerts_enabled": True,
     "commands_set": False,
     "last_watch": None,
+    "last_report": None,
+    "alerted_events": [],
 }
 
 BOT_COMMANDS = [
@@ -575,12 +577,29 @@ def detect_upcoming_events(events, state):
     return alerts
 
 
-def run_report():
+def send_hourly_report(state, force=False):
+    """Send the hourly report, deduped so watch + cron can't double-post."""
+    now = dt.datetime.now(dt.timezone.utc)
+    last = state.get("last_report")
+    if not force and last:
+        try:
+            ago = (now - dt.datetime.fromisoformat(last)).total_seconds()
+            if ago < 3000:  # 50 minutes
+                log("hourly report skipped - sent", int(ago), "seconds ago")
+                return False
+        except Exception:
+            pass
     report, _ = build_report()
     ok = send_telegram(report)
-    log("report done. telegram_ok=", ok)
-    if not ok:
-        raise SystemExit(1)
+    state["last_report"] = now.isoformat()
+    log("hourly report done. telegram_ok=", ok)
+    return ok
+
+
+def run_report():
+    state = load_state()
+    send_hourly_report(state)
+    save_state(state)
 
 
 def run_watch():
@@ -605,6 +624,10 @@ def run_watch():
         for alert in detect_upcoming_events(c, state):
             send_telegram(alert)
             log("sent EVENT alert")
+
+    # The fast watcher drives the hourly report so no long-running job blocks GitHub.
+    if dt.datetime.now(dt.timezone.utc).minute >= 7:
+        send_hourly_report(state)
 
     state["last_watch"] = dt.datetime.now(dt.timezone.utc).strftime("%H:%M UTC") + f" / {ma_time('%H:%M')} MA"
     save_state(state)
