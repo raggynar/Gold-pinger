@@ -8,7 +8,7 @@ Repo: `https://github.com/raggynar/Gold-pinger`
 
 1. **Hourly report** (at :07 past each hour) — pretty, emoji-formatted, summarized:
    - Verdict + conviction bar + horizon
-   - 🕒 Times shown in **UTC and Morocco (🇲🇦 GMT)** — event times also in **ET + Morocco**
+   - 🕒 Times shown in **UTC and Morocco (🇲🇦)** — event times in **GMT (feed native) + Morocco**
    - 📌 Why (macro only — Fed, dollar, yields, geopolitics, central banks — no RSI/SMA jargon)
    - ⚖️ Against · 📈 Path (up-first/down-first with cited levels) · 📅 Next catalyst · 🔁 Flip trigger
    - ⚠️ Active alerts · 🗓 High + **Medium** impact USD events (jobless claims, Philly Fed, PMI, GDP…)
@@ -29,7 +29,9 @@ Repo: `https://github.com/raggynar/Gold-pinger`
 
 ## Architecture
 
-- `gold_bot.py` — all logic. Modes: `report` (hourly), `watch` (~90s), `setcommands` (one-off).
+- `gold_bot.py` — all logic. Modes: `report` (hourly), `watch` (~20s), `setcommands` (one-off).
+  Commands are polled before heavy data fetches, and market data uses Yahoo's lightweight
+  chart API directly — no yfinance/pandas, so cold starts are ~1s.
 - `.github/workflows/watch.yml` — self-chaining watcher; handles commands, alerts **and sends the hourly report**.
 - `.github/workflows/hourly.yml` — cron `7 * * * *` as backup only; reports are deduped via `state.json`.
 - `state.json` — remembers commands, headlines, price, alert toggle, last report time, alerted events.
@@ -62,7 +64,7 @@ Then send me the new values and I'll update the secrets via the API in seconds.
 ## Troubleshooting
 
 - **No hourly ping?** Actions tab → check the "Gold Watch" log. It also sends the report.
-- **`/gold` no reply?** The watch workflow runs every ~90s; allow 2 min, then check its log.
+- **`/gold` no reply?** The watch workflow runs every ~20s; allow 40s, then check its log.
 - **Too many alerts?** Send `/off`.
 - **Change frequency?** Edit the `cron` in the workflow files (GitHub cron is UTC).
 
