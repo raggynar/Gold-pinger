@@ -63,6 +63,35 @@ def log(*args):
     print("[gold-bot]", *args, flush=True)
 
 
+MA_ZONE = None
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+    MA_ZONE = _ZoneInfo("Africa/Casablanca")
+    ET_ZONE = _ZoneInfo("America/New_York")
+except Exception:
+    ET_ZONE = None
+
+
+def ma_time(fmt="%d %b %Y · %H:%M"):
+    """Current time in Morocco (Africa/Casablanca)."""
+    if MA_ZONE:
+        return dt.datetime.now(MA_ZONE).strftime(fmt)
+    return dt.datetime.utcnow().strftime(fmt) + " (MA unavailable)"
+
+
+def event_time_ma(date_txt, time_txt):
+    """Convert a ForexFactory ET event time to Morocco time. Returns 'MM-DD HH:MMMA'."""
+    if not MA_ZONE or not ET_ZONE:
+        return None
+    try:
+        day = dt.datetime.strptime(date_txt.strip(), "%m-%d-%Y").date()
+        clock = dt.datetime.strptime(time_txt.strip().upper(), "%I:%M%p").time()
+        when_et = dt.datetime.combine(day, clock, tzinfo=ET_ZONE)
+        return when_et.astimezone(MA_ZONE).strftime("%m-%d %H:%M")
+    except Exception:
+        return None
+
+
 def load_state():
     try:
         if STATE_FILE.exists():
@@ -185,7 +214,9 @@ def fetch_calendar():
             except Exception:
                 pass
             impact_label = "🔴 HIGH" if (ev.findtext("impact") or "").lower() == "high" else "🟠 MED"
-            events.append(f"{impact_label} · {date_txt} {time_txt} ET — {title}")
+            ma = event_time_ma(date_txt, time_txt)
+            when = f"{date_txt} {time_txt} ET" + (f"  |  🇲🇦 {ma} MA" if ma else "")
+            events.append(f"{impact_label} · {when} — {title}")
         events = list(dict.fromkeys(events))[:8]
     except Exception as exc:
         log("calendar fetch failed", exc)
@@ -219,7 +250,7 @@ def build_alerts(m, headlines, events):
 
 def data_block(m, headlines, events, alerts):
     return "\n".join([
-        f"Time: {m['timestamp']}",
+        f"Time: {m['timestamp']} | Morocco: {ma_time()} MA",
         f"XAUUSD price: {m['price']} ({m['source']})",
         f"Prior hour: {m['prev']} | 24h high: {m['high24']} | 24h low: {m['low24']}",
         f"RSI(14): {m['rsi']} | SMA20: {m['sma20']} | SMA50: {m['sma50']}",
@@ -316,7 +347,7 @@ def format_report(r, alerts, calendar, m, title="XAUUSD · FUNDAMENTAL DIRECTION
         "",
         f"{v_icon} <b>{e(verdict)}</b>  ·  Conviction {e(r.get('CONVICTION'))}/10",
         conviction_bar(r.get("CONVICTION")),
-        f"⏱ {e(m['timestamp'])}  ·  {e(m['source'])}",
+        f"⏱ {e(m['timestamp'])}  ·  🇲🇦 {e(ma_time())} MA  ·  {e(m['source'])}",
         "",
         f"📌 <b>WHY</b>\n{e(r.get('WHY'))}",
         "",
@@ -442,9 +473,16 @@ def handle_command(text, chat_id, state, m):
     elif cmd == "/status":
         last = state.get("last_watch") or "never"
         price = m.get("price")
+        if MA_ZONE:
+            sched_ma = dt.datetime.now(dt.timezone.utc).replace(
+                minute=7, second=0, microsecond=0
+            ).astimezone(MA_ZONE).strftime("%H:%M")
+        else:
+            sched_ma = "08:07"
         send_telegram(
             "🤖 <b>BOT STATUS</b>\n\n"
-            f"✅ Online · hourly report at :07\n"
+            f"✅ Online · hourly report at :07 UTC / {sched_ma} MA\n"
+            f"🕒 Now: 🇲🇦 {ma_time()} MA\n"
             f"👀 Last watch: {html.escape(last)}\n"
             f"💰 Gold: {price}\n"
             f"🔔 Alerts: {'ON' if state.get('alerts_enabled') else 'OFF'}"
@@ -568,7 +606,7 @@ def run_watch():
             send_telegram(alert)
             log("sent EVENT alert")
 
-    state["last_watch"] = dt.datetime.now(dt.timezone.utc).strftime("%H:%M UTC")
+    state["last_watch"] = dt.datetime.now(dt.timezone.utc).strftime("%H:%M UTC") + f" / {ma_time('%H:%M')} MA"
     save_state(state)
     log("watch done. last_update_id=", state["last_update_id"])
 
