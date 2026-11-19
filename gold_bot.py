@@ -34,6 +34,8 @@ RED_PATTERNS = [
     r"\bisrael\b", r"\bukraine\b", r"\brussia\b", r"\btariff\b", r"\bsanction",
     r"recession", r"geopolit", r"\battack\b", r"\bstrike\b", r"missile",
     r"invasion", r"oil spike", r"bank crisis", r"\binflation\b", r"yield",
+    r"jobless", r"claims", r"unemployment", r"retail sales", r"\bgdp\b",
+    r"\bism\b", r"\bpmi\b", r"confidence", r"personal income", r"durable goods",
 ]
 RED_RE = re.compile("|".join(RED_PATTERNS), re.IGNORECASE)
 
@@ -172,7 +174,7 @@ def fetch_calendar():
         for ev in root.findall(".//event"):
             if (ev.findtext("country") or "").upper() != "USD":
                 continue
-            if (ev.findtext("impact") or "").lower() != "high":
+            if (ev.findtext("impact") or "").lower() not in ("high", "medium"):
                 continue
             date_txt = (ev.findtext("date") or "").strip()
             time_txt = (ev.findtext("time") or "").strip()
@@ -182,8 +184,9 @@ def fetch_calendar():
                     continue
             except Exception:
                 pass
-            events.append(f"{date_txt} {time_txt} — {title}")
-        events = list(dict.fromkeys(events))[:5]
+            impact_label = "🔴 HIGH" if (ev.findtext("impact") or "").lower() == "high" else "🟠 MED"
+            events.append(f"{impact_label} · {date_txt} {time_txt} ET — {title}")
+        events = list(dict.fromkeys(events))[:8]
     except Exception as exc:
         log("calendar fetch failed", exc)
     return events
@@ -498,6 +501,42 @@ def detect_new_red(m, headlines, state):
     return alerts
 
 
+def detect_upcoming_events(events, state):
+    """Ping ~15 min before a HIGH/MED USD event. Events look like:
+    '🔴 HIGH · 11-19-2026 8:30am ET — Initial Jobless Claims'"""
+    try:
+        from zoneinfo import ZoneInfo
+        et = ZoneInfo("America/New_York")
+    except Exception:
+        return []
+    now = dt.datetime.now(et)
+    alerted = set(state.get("alerted_events", []))
+    alerts = []
+    for ev in events:
+        if ev in alerted:
+            continue
+        match = re.search(r"(\d{2}-\d{2}-\d{4})\s+(\d{1,2}:\d{2}[ap]m)\s+ET", ev)
+        if not match:
+            continue
+        try:
+            day = dt.datetime.strptime(match.group(1), "%m-%d-%Y").date()
+            clock = dt.datetime.strptime(match.group(2).upper(), "%I:%M%p").time()
+            when = dt.datetime.combine(day, clock, tzinfo=et)
+        except Exception:
+            continue
+        minutes = (when - now).total_seconds() / 60
+        if 0 <= minutes <= 15:
+            clean = html.escape(ev.replace(" ET", ""))
+            alerts.append(
+                "⏰ <b>EVENT IN ~15 MIN</b> ⏰\n\n"
+                f"{clean}\n\n"
+                "Stand by — expect volatility."
+            )
+            alerted.add(ev)
+    state["alerted_events"] = list(alerted)[-40:]
+    return alerts
+
+
 def run_report():
     report, _ = build_report()
     ok = send_telegram(report)
@@ -525,6 +564,9 @@ def run_watch():
         for alert in detect_new_red(m, headlines, state):
             send_telegram(alert)
             log("sent RED alert")
+        for alert in detect_upcoming_events(c, state):
+            send_telegram(alert)
+            log("sent EVENT alert")
 
     state["last_watch"] = dt.datetime.now(dt.timezone.utc).strftime("%H:%M UTC")
     save_state(state)

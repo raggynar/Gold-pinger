@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: gold-ping
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   ping:
