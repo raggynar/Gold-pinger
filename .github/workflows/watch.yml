@@ -45,3 +45,17 @@ jobs:
             git commit -m "update watch state"
             git push
           fi
+
+      # GitHub's built-in cron is unreliable for new repos, so we chain runs ourselves.
+      - name: Chain next run (~80s later)
+        if: always()
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          sleep 60
+          curl -sS -X POST \
+            -H "Authorization: Bearer $GH_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -d '{"ref":"main"}' \
+            https://api.github.com/repos/raggynar/Gold-pinger/actions/workflows/watch.yml/dispatches

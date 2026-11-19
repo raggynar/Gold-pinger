@@ -13,7 +13,7 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 65
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -32,3 +32,17 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python gold_bot.py report
+
+      # Self-chain so reports keep coming even if GitHub's cron is delayed.
+      - name: Chain next hourly run
+        if: always()
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          sleep 3540
+          curl -sS -X POST \
+            -H "Authorization: Bearer $GH_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -d '{"ref":"main"}' \
+            https://api.github.com/repos/raggynar/Gold-pinger/actions/workflows/hourly.yml/dispatches
