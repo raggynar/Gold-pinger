@@ -20,14 +20,17 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Set up Python
+      - name: Set up Python (cached)
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -q -r requirements.txt
 
       - name: Run watcher
         env:
@@ -48,13 +51,13 @@ jobs:
             git push || true
           fi
 
-      # Fast self-chain so Telegram commands get answered within ~20s.
-      - name: Chain next run (~10s later)
+      # Fast self-chain so Telegram commands get answered quickly.
+      - name: Chain next run (~3s later)
         if: always()
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          sleep 10
+          sleep 3
           curl -sS -X POST \
             -H "Authorization: Bearer $GH_PAT" \
             -H "Accept: application/vnd.github+json" \
