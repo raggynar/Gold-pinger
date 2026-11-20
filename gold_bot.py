@@ -39,7 +39,10 @@ RED_PATTERNS = [
 ]
 RED_RE = re.compile("|".join(RED_PATTERNS), re.IGNORECASE)
 
+COMMAND_VERSION = 2  # bump to re-register the Telegram command menu
+
 DEFAULT_STATE = {
+    "commands_version": 0,
     "last_update_id": 0,
     "seen_headlines": [],
     "last_price": None,
@@ -56,6 +59,7 @@ BOT_COMMANDS = [
     {"command": "gold", "description": "Full hourly direction + signal"},
     {"command": "path", "description": "Direction + where price goes first"},
     {"command": "signal", "description": "Experimental signal only"},
+    {"command": "event", "description": "Next event: above/below forecast"},
     {"command": "alerts", "description": "Show alert settings"},
     {"command": "on", "description": "Turn RED alerts ON"},
     {"command": "off", "description": "Turn RED alerts OFF"},
@@ -237,8 +241,18 @@ def fetch_news():
     return headlines[:8]
 
 
-def fetch_calendar():
-    events = []
+def event_gmt_datetime(date_txt, time_txt):
+    try:
+        day = dt.datetime.strptime(date_txt.strip(), "%m-%d-%Y").date()
+        clock = dt.datetime.strptime(time_txt.strip().upper(), "%I:%M%p").time()
+        return dt.datetime.combine(day, clock, tzinfo=dt.timezone.utc)
+    except Exception:
+        return None
+
+
+def fetch_calendar_events():
+    """Structured USD High/Medium events, with the feed's real forecast/previous."""
+    out = []
     try:
         r = requests.get(
             "https://nfs.faireconomy.media/ff_calendar_thisweek.xml",
@@ -248,28 +262,136 @@ def fetch_calendar():
             log("calendar feed unavailable - skipping")
             return []
         root = ET.fromstring(r.content)
-        today = dt.date.today()
         for ev in root.findall(".//event"):
+            impact = (ev.findtext("impact") or "").strip().lower()
             if (ev.findtext("country") or "").upper() != "USD":
                 continue
-            if (ev.findtext("impact") or "").lower() not in ("high", "medium"):
+            if impact not in ("high", "medium"):
                 continue
             date_txt = (ev.findtext("date") or "").strip()
             time_txt = (ev.findtext("time") or "").strip()
             title = (ev.findtext("title") or "").strip()
-            try:
-                if dt.datetime.strptime(date_txt, "%m-%d-%Y").date() < today:
-                    continue
-            except Exception:
-                pass
-            impact_label = "🔴 HIGH" if (ev.findtext("impact") or "").lower() == "high" else "🟠 MED"
+            if not title:
+                continue
+            when = event_gmt_datetime(date_txt, time_txt)
+            if when and when < dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=30):
+                continue
+            impact_label = "🔴 HIGH" if impact == "high" else "🟠 MED"
             ma = event_time_ma(date_txt, time_txt)
-            when = f"{date_txt} {time_txt} GMT" + (f"  |  🇲🇦 {ma} MA" if ma else "")
-            events.append(f"{impact_label} · {when} — {title}")
-        events = list(dict.fromkeys(events))[:8]
+            when_txt = f"{date_txt} {time_txt} GMT" + (f"  |  🇲🇦 {ma} MA" if ma else "")
+            out.append({
+                "title": title,
+                "impact": impact,
+                "date": date_txt,
+                "time": time_txt,
+                "when": when,
+                "forecast": (ev.findtext("forecast") or "").strip() or "n/a",
+                "previous": (ev.findtext("previous") or "").strip() or "n/a",
+                "label": f"{impact_label} · {when_txt} — {title}",
+            })
+        seen, unique = set(), []
+        for e in out:
+            key = (e["date"], e["time"], e["title"])
+            if key not in seen:
+                seen.add(key)
+                unique.append(e)
+        unique.sort(key=lambda x: x["when"] or dt.datetime.max.replace(tzinfo=dt.timezone.utc))
+        return unique[:10]
     except Exception as exc:
         log("calendar fetch failed", exc)
-    return events
+        return []
+
+
+def fetch_calendar():
+    return [e["label"] for e in fetch_calendar_events()]
+
+
+def event_kind(title):
+    t = (title or "").lower()
+    if any(k in t for k in ["fomc", "fed chair", "chairman", "rate decision",
+                            "federal funds", "fomc minutes"]):
+        return "FED"
+    if any(k in t for k in ["cpi", "ppi", "pce", "inflation", "rpi",
+                            "price index", "cost of living"]):
+        return "INFLATION"
+    if any(k in t for k in ["unemployment rate", "jobless claims", "unemployment claims",
+                            "claimant", "continuing claims", "initial claims"]):
+        return "LABOR_LOOSE"
+    if any(k in t for k in ["nonfarm", "payroll", "employment change", "adp",
+                            "nfp", "jobs"]):
+        return "LABOR_TIGHT"
+    if any(k in t for k in ["trump", "president speaks"]):
+        return "TWO_WAY"
+    return "GROWTH"
+
+
+def scenario_for(ev):
+    """Conditional XAUUSD reaction map. Forecast/previous come from the feed only."""
+    if not ev:
+        return None
+    title = ev.get("title", "")
+    fc = ev.get("forecast", "n/a")
+    prev = ev.get("previous", "n/a")
+    kind = event_kind(title)
+
+    if kind == "INFLATION":
+        above = "📉 Gold DOWN — hotter prices lift Treasury yields and the dollar, raising the cost of holding gold."
+        below = "📈 Gold UP — softer inflation boosts Fed rate-cut bets, pulling yields and the dollar lower."
+    elif kind == "LABOR_LOOSE":
+        above = "📈 Gold UP — more joblessness is dovish for the Fed; yields/dollar tend to fall."
+        below = "📉 Gold DOWN — fewer claims signal a resilient labour market and fewer cuts."
+    elif kind == "LABOR_TIGHT":
+        above = "📉 Gold DOWN — strong hiring delays Fed cuts; yields/dollar rise."
+        below = "📈 Gold UP — weak hiring brings rate cuts closer."
+    elif kind == "FED":
+        above = "📉 Gold DOWN — hawkish tone lifts yields and the dollar."
+        below = "📈 Gold UP — dovish tone weighs on yields and the dollar."
+    elif kind == "TWO_WAY":
+        above = "⚠️ Two-way — headline-driven; gold can spike either way. Confirm with DXY/yields."
+        below = "⚠️ Two-way — headline-driven; do not pre-position without confirmation."
+    else:
+        above = "📉 Gold DOWN — stronger activity reduces the urgency for Fed cuts."
+        below = "📈 Gold UP — weaker activity increases rate-cut odds."
+
+    if kind == "FED":
+        hi_label, lo_label = "IF HAWKISH", "IF DOVISH"
+    else:
+        hi_label, lo_label = f"IF ABOVE {fc}", f"IF BELOW {fc}"
+
+    return {
+        "title": title,
+        "label": ev.get("label", ""),
+        "forecast": fc,
+        "previous": prev,
+        "kind": kind,
+        "above": f"{hi_label} → {above}",
+        "below": f"{lo_label} → {below}",
+        "inline": "IF IN LINE → limited move; watch DXY and 10Y yield for the real direction.",
+    }
+
+
+def next_event(event_objs, soonest_only=True):
+    """Next USD event that has not passed yet."""
+    now = dt.datetime.now(dt.timezone.utc)
+    future = [e for e in (event_objs or [])
+              if e.get("when") is None or e["when"] >= now - dt.timedelta(minutes=5)]
+    return future[0] if future else None
+
+
+def scenario_block(ev):
+    s = scenario_for(ev)
+    if not s:
+        return ""
+    lines = [
+        f"🧭 <b>EVENT SCENARIO · {html.escape(s['title'])}</b>",
+        html.escape(s["label"]),
+        f"Forecast: <b>{html.escape(s['forecast'])}</b> · Previous: {html.escape(s['previous'])}",
+        s["below"],
+        s["above"],
+        html.escape(s["inline"]),
+        "<i>Typical reaction, not a guarantee — positioning can reverse it.</i>",
+    ]
+    return "\n".join(lines)
 
 
 def build_alerts(m, headlines, events):
@@ -412,7 +534,7 @@ def conviction_bar(value):
     return "🔴" * n + "⚪" * (10 - n)
 
 
-def format_report(r, alerts, calendar, m, headlines=None,
+def format_report(r, alerts, calendar, m, headlines=None, event_objs=None,
                   title="XAUUSD · HOURLY DIRECTION"):
     def e(x):
         return html.escape(str(x or ""))
@@ -436,6 +558,11 @@ def format_report(r, alerts, calendar, m, headlines=None,
         f"⚖️ <b>AGAINST</b>\n{e(r.get('AGAINST'))}",
         "",
         f"📅 <b>NEXT CATALYST</b>\n{e(r.get('CATALYST'))}",
+    ]
+    block = scenario_block(next_event(event_objs))
+    if block:
+        lines += ["", block]
+    lines += [
         "",
         f"⚗️ <b>SIGNAL — EXPERIMENTAL</b>\n{e(r.get('SIGNAL'))}",
         "",
@@ -453,7 +580,7 @@ def format_report(r, alerts, calendar, m, headlines=None,
     lines += [
         "",
         "━━━━━━━━━━━━━━━━━━━━",
-        "💬 <b>/gold</b> report · <b>/path</b> call · <b>/signal</b> · <b>/status</b> · <b>/help</b>",
+        "💬 <b>/gold</b> report · <b>/event</b> scenario · <b>/path</b> · <b>/signal</b> · <b>/help</b>",
         "<i>Signal is data-derived, not verified — forward-test only. Not financial advice.</i>",
     ]
     return "\n".join(lines)
@@ -482,10 +609,11 @@ def send_telegram(text, parse_mode="HTML"):
 def build_report():
     m = fetch_market()
     n = fetch_news()
-    c = fetch_calendar()
+    ev_objs = fetch_calendar_events()
+    c = [e["label"] for e in ev_objs]
     a = build_alerts(m, n, c)
     r = ensure_fields(ai_struct(data_block(m, n, c, a)) or {}, m, c)
-    return format_report(r, a, c, m, n), m
+    return format_report(r, a, c, m, n, ev_objs), m
 
 
 def set_bot_commands():
@@ -519,8 +647,8 @@ def get_updates(offset):
 
 def handle_command(text, chat_id, state, m=None):
     cmd = (text or "").strip().split()[0].lower().split("@")[0]
-    if cmd not in ["/gold", "/path", "/signal", "/alerts", "/on", "/off",
-                   "/status", "/help", "/start"]:
+    if cmd not in ["/gold", "/path", "/signal", "/event", "/alerts", "/on",
+                   "/off", "/status", "/help", "/start"]:
         return
 
     if cmd in ["/gold", "/start"]:
@@ -554,6 +682,15 @@ def handle_command(text, chat_id, state, m=None):
                 "<i>Data-derived, not verified — forward-test only. "
                 "Not financial advice.</i>"
             )
+        send_telegram(msg)
+        log("responded", cmd)
+
+    elif cmd == "/event":
+        ev_objs = fetch_calendar_events()
+        block = scenario_block(next_event(ev_objs))
+        msg = ("🗓 <b>XAUUSD · EVENT SCENARIO</b>\n\n" + block
+               if block else
+               "🗓 <b>XAUUSD · EVENT SCENARIO</b>\n\nNo upcoming USD High/Medium event in the feed.")
         send_telegram(msg)
         log("responded", cmd)
 
@@ -599,6 +736,7 @@ def handle_command(text, chat_id, state, m=None):
             "/gold — hourly direction + first move + signal\n"
             "/path — direction + where price goes first\n"
             "/signal — experimental signal only\n"
+            "/event — next event: if above/below forecast\n"
             "/alerts — alert settings\n"
             "/on — turn RED alerts on\n"
             "/off — turn alerts off\n"
@@ -645,12 +783,12 @@ def detect_new_red(m, headlines, state):
     return alerts
 
 
-def detect_upcoming_events(events, state):
-    """Ping ~15 min before a HIGH/MED USD event. ForexFactory feed times are GMT.
-    Events look like: '🔴 HIGH · 11-19-2026 1:30pm GMT | 🇲🇦 11-19 13:30 MA — Claims'"""
+def detect_upcoming_events(events, state, event_objs=None):
+    """Ping ~15 min before a HIGH/MED USD event, with the above/below scenario."""
     now = dt.datetime.now(dt.timezone.utc)
     alerted = set(state.get("alerted_events", []))
     alerts = []
+    by_label = {o.get("label"): o for o in (event_objs or [])}
     for ev in events:
         if ev in alerted:
             continue
@@ -666,10 +804,12 @@ def detect_upcoming_events(events, state):
         minutes = (when - now).total_seconds() / 60
         if 0 <= minutes <= 15:
             clean = html.escape(ev.replace(" GMT", ""))
+            sc = scenario_block(by_label.get(ev))
             alerts.append(
                 "⏰ <b>EVENT IN ~15 MIN</b> ⏰\n\n"
                 f"{clean}\n\n"
-                "Stand by — expect volatility."
+                + (sc + "\n\n" if sc else "")
+                + "Stand by — expect volatility."
             )
             alerted.add(ev)
     state["alerted_events"] = list(alerted)[-40:]
@@ -683,7 +823,7 @@ CHECKIN_TIMES = [
 ]
 
 
-def send_scheduled_checkins(state, m, headlines, events):
+def send_scheduled_checkins(state, m, headlines, events, event_objs=None):
     """Proactive 'speaks first' messages, once per day each, in Morocco time."""
     now = dt.datetime.now(MA_ZONE) if MA_ZONE else dt.datetime.utcnow()
     sent = set(state.get("sent_checkins", []))
@@ -717,6 +857,7 @@ def send_scheduled_checkins(state, m, headlines, events):
                 "🌅 <b>GOOD MORNING</b> 🇲🇦\n\n"
                 f"Gold is at <b>{price}</b> · DXY {m.get('dxy')} · 10Y {m.get('us10y')}%\n\n"
                 + (f"🗓 <b>ON YOUR RADAR TODAY (MA time)</b>\n{top}\n\n" if top else "")
+                + (scenario_block(next_event(event_objs)) + "\n\n" if event_objs else "")
                 + "I'll nudge you at the New York open. Stay sharp. 🟡"
             )
         elif name == "nyopen":
@@ -775,9 +916,11 @@ def run_report():
 
 def run_watch():
     state = load_state()
-    if not state.get("commands_set"):
+    if (not state.get("commands_set")
+            or state.get("commands_version") != COMMAND_VERSION):
         set_bot_commands()
         state["commands_set"] = True
+        state["commands_version"] = COMMAND_VERSION
 
     # Poll commands FIRST so replies are not delayed by market/news fetches.
     updates = get_updates(state.get("last_update_id", 0))
@@ -787,13 +930,14 @@ def run_watch():
 
     m = fetch_market()
     headlines = fetch_news()
-    c = fetch_calendar()
+    ev_objs = fetch_calendar_events()
+    c = [e["label"] for e in ev_objs]
 
     if state.get("alerts_enabled", True):
         for alert in detect_new_red(m, headlines, state):
             send_telegram(alert)
             log("sent RED alert")
-        for alert in detect_upcoming_events(c, state):
+        for alert in detect_upcoming_events(c, state, ev_objs):
             send_telegram(alert)
             log("sent EVENT alert")
 
@@ -802,7 +946,7 @@ def run_watch():
         send_hourly_report(state)
 
     # Proactive 'speaks first' check-ins (Morocco time).
-    send_scheduled_checkins(state, m, headlines, c)
+    send_scheduled_checkins(state, m, headlines, c, ev_objs)
 
     state["last_watch"] = dt.datetime.now(dt.timezone.utc).strftime("%H:%M UTC") + f" / {ma_time('%H:%M')} MA"
     save_state(state)

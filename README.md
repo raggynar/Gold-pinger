@@ -4,8 +4,11 @@ Runs in the cloud 24/7 on GitHub Actions (free). **Your PC can be off. Cost: $0.
 
 Every hour the bot sends: **fundamental direction (BULLISH/BEARISH/NEUTRAL) + conviction**,
 the **exact 1–2 hour window in 🇲🇦 Morocco time**, **where price is expected to go FIRST**
-(real level from the data), the follow-through, the nearest **RED catalyst**, an
-**experimental data-derived signal**, the flip trigger, and a **RED NEWS WATCH** list.
+(real level from the data), the follow-through, and a **🧭 EVENT SCENARIO MAP** for the next
+USD event: the feed's real **forecast/previous**, then **"if below forecast → gold UP/DOWN"**
+and **"if above forecast → gold UP/DOWN"** with the reason. Plus the experimental signal,
+flip trigger and **RED NEWS WATCH** list. The same scenario map is included in the
+**15-minute pre-event alert** and the morning brief.
 
 Repo: `https://github.com/raggynar/Gold-pinger`
 
@@ -20,12 +23,14 @@ Repo: `https://github.com/raggynar/Gold-pinger`
    - 🕒 **Forward window** (next 1–2h, 🇲🇦 Morocco time + current session)
    - 🎯 **Where price goes FIRST** — one concrete level taken from real 24h high/low/range data
    - ↳ THEN follow-through · 📌 Why (macro only — Fed, dollar, yields, geopolitics)
-   - ⚖️ Against · 📅 Nearest RED catalyst · ⚗️ Experimental signal (zone / invalidation / target) · 🔁 Flip trigger
+   - ⚖️ Against · 📅 Nearest RED catalyst
+   - 🧭 **EVENT SCENARIO MAP** — forecast/previous + "if below / if above / if in line" for gold
+   - ⚗️ Experimental signal (zone / invalidation / target) · 🔁 Flip trigger
    - 🚨 RED NEWS WATCH · ⚠️ Active alerts · 🗓 High + **Medium** impact USD events with GMT **and 🇲🇦 Morocco** time
 3. **RED news + event alerts** — the watcher checks every ~90 seconds and pings you when:
    - A **new high-impact headline** appears (CPI, PPI, PCE, NFP, Fed, war, tariffs, etc.)
    - **Gold drops ≥0.6%** between checks (or pumps up)
-   - An event is **~15 minutes away** (⏰ pre-event heads-up, e.g. Unemployment Claims)
+   - An event is **~15 minutes away** — ⏰ pre-event heads-up **with the full above/below scenario map**
 4. **Commands** — message your bot (menu also shows in Telegram):
 
 | Command | What it does |
@@ -33,6 +38,7 @@ Repo: `https://github.com/raggynar/Gold-pinger`
 | `/gold` | Full hourly direction + first move + signal |
 | `/path` | Direction + where price goes first |
 | `/signal` | Experimental signal only |
+| `/event` | Next USD event with above/below-forecast scenarios |
 | `/alerts` | Show alert settings |
 | `/on` / `/off` | Turn RED alerts on/off |
 | `/status` | Bot health + last check + gold price |
@@ -55,6 +61,9 @@ Repo: `https://github.com/raggynar/Gold-pinger`
   on your funded account. Earlier M5 backtests found no statistically proven edge, so treat it
   as a watch/forward-test aid, **not** a "buy here" command.
 - "Where price goes first" is a directional call from real 24h high/low/range data, not a guarantee.
+- 🧭 Event scenarios are **conditional "if/when" maps** from the standard rates/dollar reaction function,
+  using the feed's real forecast. They describe the typical move, not a certain outcome — gold can
+  react opposite to the headline if positioning is stretched.
 - No premium real-time feed or live tick chart — uses free public data (1h candles).
 - GitHub cron can be delayed 5–15 min; scheduled workflows pause after 60 days with no commits
   (make a small commit every ~2 months).
