@@ -1,6 +1,11 @@
-# Free XAUUSD Telegram Bot — hourly reports + RED news alerts
+# Free XAUUSD Telegram Bot — hourly direction, first target, signal + RED news
 
 Runs in the cloud 24/7 on GitHub Actions (free). **Your PC can be off. Cost: $0.**
+
+Every hour the bot sends: **fundamental direction (BULLISH/BEARISH/NEUTRAL) + conviction**,
+the **exact 1–2 hour window in 🇲🇦 Morocco time**, **where price is expected to go FIRST**
+(real level from the data), the follow-through, the nearest **RED catalyst**, an
+**experimental data-derived signal**, the flip trigger, and a **RED NEWS WATCH** list.
 
 Repo: `https://github.com/raggynar/Gold-pinger`
 
@@ -10,12 +15,13 @@ Repo: `https://github.com/raggynar/Gold-pinger`
    - 🌅 `07:30` morning brief — gold, dollar, yields + today's events
    - 🗽 `14:30` New York open nudge — price move + top headline
    - 🌙 `21:00` evening wrap — session range + what I'm watching overnight
-2. **Hourly report** (at :07 past each hour) — pretty, emoji-formatted, summarized:
-   - Verdict + conviction bar + horizon
-   - 🕒 Times shown in **UTC and Morocco (🇲🇦)** — event times in **GMT (feed native) + Morocco**
-   - 📌 Why (macro only — Fed, dollar, yields, geopolitics, central banks — no RSI/SMA jargon)
-   - ⚖️ Against · 📈 Path (up-first/down-first with cited levels) · 📅 Next catalyst · 🔁 Flip trigger
-   - ⚠️ Active alerts · 🗓 High + **Medium** impact USD events (jobless claims, Philly Fed, PMI, GDP…)
+2. **Hourly report** (at :07 past each hour) — pretty, emoji-formatted, actionable:
+   - 🟢/🔴/🟡 Fundamental direction + conviction bar
+   - 🕒 **Forward window** (next 1–2h, 🇲🇦 Morocco time + current session)
+   - 🎯 **Where price goes FIRST** — one concrete level taken from real 24h high/low/range data
+   - ↳ THEN follow-through · 📌 Why (macro only — Fed, dollar, yields, geopolitics)
+   - ⚖️ Against · 📅 Nearest RED catalyst · ⚗️ Experimental signal (zone / invalidation / target) · 🔁 Flip trigger
+   - 🚨 RED NEWS WATCH · ⚠️ Active alerts · 🗓 High + **Medium** impact USD events with GMT **and 🇲🇦 Morocco** time
 3. **RED news + event alerts** — the watcher checks every ~90 seconds and pings you when:
    - A **new high-impact headline** appears (CPI, PPI, PCE, NFP, Fed, war, tariffs, etc.)
    - **Gold drops ≥0.6%** between checks (or pumps up)
@@ -24,8 +30,9 @@ Repo: `https://github.com/raggynar/Gold-pinger`
 
 | Command | What it does |
 |---|---|
-| `/gold` | Full summarized report right now |
-| `/path` | Short-term path call only |
+| `/gold` | Full hourly direction + first move + signal |
+| `/path` | Direction + where price goes first |
+| `/signal` | Experimental signal only |
 | `/alerts` | Show alert settings |
 | `/on` / `/off` | Turn RED alerts on/off |
 | `/status` | Bot health + last check + gold price |
@@ -44,6 +51,10 @@ Repo: `https://github.com/raggynar/Gold-pinger`
 
 ## Honest limits (free tier)
 
+- The ⚗️ **signal is experimental** — derived only from the supplied data and **not verified**
+  on your funded account. Earlier M5 backtests found no statistically proven edge, so treat it
+  as a watch/forward-test aid, **not** a "buy here" command.
+- "Where price goes first" is a directional call from real 24h high/low/range data, not a guarantee.
 - No premium real-time feed or live tick chart — uses free public data (1h candles).
 - GitHub cron can be delayed 5–15 min; scheduled workflows pause after 60 days with no commits
   (make a small commit every ~2 months).

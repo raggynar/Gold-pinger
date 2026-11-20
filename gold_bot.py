@@ -53,8 +53,9 @@ DEFAULT_STATE = {
 }
 
 BOT_COMMANDS = [
-    {"command": "gold", "description": "Full XAUUSD report"},
-    {"command": "path", "description": "Short-term path call only"},
+    {"command": "gold", "description": "Full hourly direction + signal"},
+    {"command": "path", "description": "Direction + where price goes first"},
+    {"command": "signal", "description": "Experimental signal only"},
     {"command": "alerts", "description": "Show alert settings"},
     {"command": "on", "description": "Turn RED alerts ON"},
     {"command": "off", "description": "Turn RED alerts OFF"},
@@ -93,6 +94,32 @@ def event_time_ma(date_txt, time_txt):
         return when_gmt.astimezone(MA_ZONE).strftime("%m-%d %H:%M")
     except Exception:
         return None
+
+
+def window_line():
+    """Concrete forward time window, computed locally (not by the AI)."""
+    now = dt.datetime.now(dt.timezone.utc)
+    h = now.hour
+    if h < 7:
+        session = "Asia / early"
+    elif h < 12:
+        session = "London"
+    elif h < 16:
+        session = "New York open"
+    elif h < 21:
+        session = "New York afternoon"
+    else:
+        session = "Late / Asia overlap"
+    end = now + dt.timedelta(hours=2)
+    end_ma = end.astimezone(MA_ZONE).strftime("%H:%M") if MA_ZONE else end.strftime("%H:%M")
+    now_ma = now.astimezone(MA_ZONE).strftime("%H:%M") if MA_ZONE else now.strftime("%H:%M")
+    return (f"Next 1–2 hours · 🇲🇦 {now_ma} → {end_ma} MA "
+            f"({session} session)")
+
+
+def red_headlines(headlines):
+    """Only the headlines that actually match a high-impact keyword."""
+    return [h for h in (headlines or []) if RED_RE.search(h)]
 
 
 def load_state():
@@ -141,7 +168,9 @@ def yahoo_closes(symbol):
 def fetch_market():
     m = {
         "price": None, "prev": None, "rsi": None, "sma20": None, "sma50": None,
-        "low24": None, "high24": None, "dxy": None, "us10y": None, "source": "",
+        "low24": None, "high24": None, "range_mid": None, "dist_high": None,
+        "dist_low": None, "atr": None, "trend": None,
+        "dxy": None, "us10y": None, "source": "",
         "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%d %b %Y · %H:%M UTC"),
     }
     for sym, key in [("GC=F", "gold"), ("DX-Y.NYB", "dxy"), ("^TNX", "us10y")]:
@@ -158,6 +187,14 @@ def fetch_market():
                     m["sma50"] = round(sum(closes[-50:]) / 50, 2)
                 m["low24"] = round(min(closes[-24:]), 2)
                 m["high24"] = round(max(closes[-24:]), 2)
+                m["range_mid"] = round((m["high24"] + m["low24"]) / 2, 2)
+                m["dist_high"] = round(m["high24"] - m["price"], 2)
+                m["dist_low"] = round(m["price"] - m["low24"], 2)
+                moves = [abs(closes[i] - closes[i - 1])
+                         for i in range(max(1, len(closes) - 24), len(closes))]
+                m["atr"] = round(sum(moves) / len(moves), 2) if moves else None
+                m["trend"] = ("above SMA20" if m["sma20"] and m["price"] > m["sma20"]
+                              else "below SMA20")
                 m["source"] = "Yahoo Finance · GC=F 1h"
             elif key == "dxy":
                 m["dxy"] = round(closes[-1], 2)
@@ -261,13 +298,18 @@ def build_alerts(m, headlines, events):
 
 
 def data_block(m, headlines, events, alerts):
+    reds = red_headlines(headlines)
     return "\n".join([
         f"Time: {m['timestamp']} | Morocco: {ma_time()} MA",
+        f"Trading window: {window_line()}",
         f"XAUUSD price: {m['price']} ({m['source']})",
         f"Prior hour: {m['prev']} | 24h high: {m['high24']} | 24h low: {m['low24']}",
+        f"Range mid: {m['range_mid']} | +to high: {m['dist_high']} | -to low: {m['dist_low']}",
+        f"Hourly ATR: {m['atr']} | Trend: {m['trend']}",
         f"RSI(14): {m['rsi']} | SMA20: {m['sma20']} | SMA50: {m['sma50']}",
         f"DXY: {m['dxy']} | US10Y yield: {m['us10y']}",
-        "Headlines: " + (" | ".join(headlines) if headlines else "none"),
+        "RED headlines: " + (" | ".join(reds) if reds else "none in current data"),
+        "All headlines: " + (" | ".join(headlines[:6]) if headlines else "none"),
         "High-impact USD events: " + (" | ".join(events) if events else "none found"),
         "Pre-flagged alerts: " + (", ".join(alerts) if alerts else "none"),
     ])
@@ -277,16 +319,18 @@ def ai_struct(block):
     if not GROQ:
         return None
     prompt = f"""You are a professional XAUUSD analyst. Using ONLY the data below —
-never invent numbers or levels, never use outside memory — output EXACTLY 7 lines,
+never invent numbers or levels, never use outside memory — output EXACTLY 9 lines,
 plain text, no markdown, no blank lines, with these exact prefixes:
 
-VERDICT: <BULLISH or BEARISH or NEUTRAL>
+VERDICT: <BULLISH or BEARISH or NEUTRAL — the FUNDAMENTAL direction>
 CONVICTION: <integer 1-10>
-WHY: <1-2 sentences on the dominant MACRO drivers only — Fed/rates, DXY/dollar, yields, geopolitics, central-bank demand. NEVER mention RSI, SMA, moving averages, or any technical indicator>
+FIRST: <where price goes FIRST in the given trading window — pick ONE concrete level from the supplied price / 24h high / 24h low / range mid. Format: "Up first toward <level>" or "Down first toward <level>" or "Sideways around <level>">
+THEN: <what typically happens after that first move, using ONLY supplied levels and 1 short sentence>
+WHY: <1-2 sentences, dominant MACRO drivers only — Fed/rates, DXY/dollar, yields, geopolitics, central-bank demand. NEVER mention RSI, SMA, ATR, or any technical indicator>
 AGAINST: <1 sentence on the strongest counter-force>
-PATH: <Up first / Down first / One-way, using ONLY supplied levels, plus confidence>
-CATALYST: <event + date from supplied calendar/headlines, or "none in current data">
-FLIP: <1-2 concrete conditions that would change the view>
+CATALYST: <the nearest RED event from supplied headlines/calendar with its date/time, or "none in current data">
+SIGNAL: <EXPERIMENTAL data-derived watch: "Watch <entry zone from supplied levels> · invalidate below/above <supplied level> · target <supplied level>" OR "No clean signal — stand aside". Never claim certainty>
+FLIP: <1-2 concrete conditions from the supplied data that would change the direction>
 
 DATA:
 {block}
@@ -307,7 +351,8 @@ DATA:
         r.raise_for_status()
         text = r.json()["choices"][0]["message"]["content"].strip()
         result = {}
-        for key in ["VERDICT", "CONVICTION", "WHY", "AGAINST", "PATH", "CATALYST", "FLIP"]:
+        for key in ["VERDICT", "CONVICTION", "FIRST", "THEN", "WHY", "AGAINST",
+                    "CATALYST", "SIGNAL", "FLIP"]:
             match = re.search(rf"^{key}:\s*(.+)$", text, re.MULTILINE | re.IGNORECASE)
             result[key] = match.group(1).strip() if match else ""
         return result if result.get("VERDICT") else None
@@ -316,27 +361,37 @@ DATA:
         return None
 
 
-def rules_struct(m):
+def rules_struct(m, events=None):
     price, rsi_val, sma20 = m.get("price"), m.get("rsi"), m.get("sma20")
+    hi, lo, mid = m.get("high24"), m.get("low24"), m.get("range_mid")
     if price is None:
-        return {"VERDICT": "NEUTRAL", "CONVICTION": "0", "WHY": "Data unavailable — verdict withheld.",
-                "AGAINST": "No live data.", "PATH": "Path withheld.",
-                "CATALYST": "none in current data", "FLIP": "Requires live data."}
-    trend = "below" if (sma20 and price < sma20) else "above"
-    verdict = "BEARISH" if trend == "below" else "BULLISH"
-    if rsi_val is not None and rsi_val <= 30 and trend == "below":
-        path = "Down first, then possible short bounce (low confidence)"
-    elif rsi_val is not None and rsi_val >= 70:
-        path = "Up first, then pullback (low confidence)"
+        return {"VERDICT": "NEUTRAL", "CONVICTION": "0", "FIRST": "Path withheld.",
+                "THEN": "Path withheld.", "WHY": "Data unavailable — verdict withheld.",
+                "AGAINST": "No live data.", "CATALYST": "none in current data",
+                "SIGNAL": "No clean signal — stand aside.", "FLIP": "Requires live data."}
+    below = bool(sma20 and price < sma20)
+    verdict = "BEARISH" if below else "BULLISH"
+    first = (f"Down first toward {lo}" if below else f"Up first toward {hi}")
+    if rsi_val is not None and rsi_val <= 30 and below:
+        then = f"Possible bounce off {lo} toward {mid}"
+    elif rsi_val is not None and rsi_val >= 70 and not below:
+        then = f"Pullback from {hi} toward {mid}"
     else:
-        path = f"One-way while gold holds {trend} its recent range (low confidence)"
+        then = f"Reassess at {mid} if the level is reached"
+    cat = (events[0] if events else "none in current data")
     return {
         "VERDICT": verdict, "CONVICTION": "5",
-        "WHY": f"Gold at {price} with DXY {m.get('dxy')} and 10Y yield {m.get('us10y')}% keeping pressure on the metal. Data-only mode — no AI key.",
-        "AGAINST": "Oversold readings can trigger sharp counter-trend bounces.",
-        "PATH": path,
-        "CATALYST": "none in current data",
-        "FLIP": "Gold reclaiming recent highs with a softer dollar.",
+        "FIRST": first,
+        "THEN": then,
+        "WHY": (f"Gold at {price} with DXY {m.get('dxy')} and 10Y yield {m.get('us10y')}% "
+                "framing the macro backdrop. Data-only mode — no AI key."),
+        "AGAINST": "A sharp counter-trend move can invalidate this quickly.",
+        "CATALYST": cat,
+        "SIGNAL": (f"EXPERIMENTAL · Watch {(mid if below else lo)}–{(hi if below else mid)} "
+                   f"· invalidate {('above' if below else 'below')} {(hi if below else lo)} "
+                   f"· target {(lo if below else hi)}"),
+        "FLIP": (f"Price closing {('above' if below else 'below')} {sma20} "
+                 f"with a {('softer' if below else 'harder')} dollar."),
     }
 
 
@@ -348,7 +403,8 @@ def conviction_bar(value):
     return "🔴" * n + "⚪" * (10 - n)
 
 
-def format_report(r, alerts, calendar, m, title="XAUUSD · FUNDAMENTAL DIRECTION"):
+def format_report(r, alerts, calendar, m, headlines=None,
+                  title="XAUUSD · HOURLY DIRECTION"):
     def e(x):
         return html.escape(str(x or ""))
 
@@ -357,29 +413,39 @@ def format_report(r, alerts, calendar, m, title="XAUUSD · FUNDAMENTAL DIRECTION
     lines = [
         f"🟡 <b>{e(title)}</b> 🟡",
         "",
-        f"{v_icon} <b>{e(verdict)}</b>  ·  Conviction {e(r.get('CONVICTION'))}/10",
+        f"{v_icon} <b>FUNDAMENTAL DIRECTION: {e(verdict)}</b> · Conviction {e(r.get('CONVICTION'))}/10",
         conviction_bar(r.get("CONVICTION")),
-        f"⏱ {e(m['timestamp'])}  ·  🇲🇦 {e(ma_time())} MA  ·  {e(m['source'])}",
+        f"⏱ {e(m['timestamp'])}  ·  🇲🇦 {e(ma_time())} MA",
+        f"🕒 <b>WINDOW</b>: {e(window_line())}",
+        f"💰 Gold {e(m.get('price'))} · 24h {e(m.get('low24'))}–{e(m.get('high24'))} · {e(m['source'])}",
         "",
-        f"📌 <b>WHY</b>\n{e(r.get('WHY'))}",
+        f"🎯 <b>WHERE PRICE GOES FIRST</b>\n{e(r.get('FIRST'))}",
+        f"↳ <b>THEN</b>: {e(r.get('THEN'))}",
+        "",
+        f"📌 <b>WHY (FUNDAMENTAL)</b>\n{e(r.get('WHY'))}",
         "",
         f"⚖️ <b>AGAINST</b>\n{e(r.get('AGAINST'))}",
         "",
-        f"📈 <b>PATH</b>\n{e(r.get('PATH'))}",
-        "",
         f"📅 <b>NEXT CATALYST</b>\n{e(r.get('CATALYST'))}",
+        "",
+        f"⚗️ <b>SIGNAL — EXPERIMENTAL</b>\n{e(r.get('SIGNAL'))}",
         "",
         f"🔁 <b>FLIP TRIGGER</b>\n{e(r.get('FLIP'))}",
     ]
+    reds = red_headlines(headlines)
+    if reds:
+        lines += ["", "🚨 <b>RED NEWS WATCH</b>", "\n".join("• " + e(x) for x in reds[:4])]
+    else:
+        lines += ["", "🚨 <b>RED NEWS WATCH</b>", "• No high-impact headlines in current data"]
     if alerts:
         lines += ["", "⚠️ <b>ACTIVE ALERTS</b>", "\n".join("• " + e(a) for a in alerts)]
     if calendar:
-        lines += ["", "🗓 <b>HIGH-IMPACT USD EVENTS</b>", "\n".join("• " + e(c) for c in calendar)]
+        lines += ["", "🗓 <b>HIGH-IMPACT USD EVENTS</b>", "\n".join("• " + e(c) for c in calendar[:5])]
     lines += [
         "",
         "━━━━━━━━━━━━━━━━━━━━",
-        "💬 <b>/gold</b> full report · <b>/path</b> path only · <b>/status</b> · <b>/help</b>",
-        "<i>Analysis only — not financial advice. Manage risk.</i>",
+        "💬 <b>/gold</b> report · <b>/path</b> call · <b>/signal</b> · <b>/status</b> · <b>/help</b>",
+        "<i>Signal is data-derived, not verified — forward-test only. Not financial advice.</i>",
     ]
     return "\n".join(lines)
 
@@ -409,8 +475,8 @@ def build_report():
     n = fetch_news()
     c = fetch_calendar()
     a = build_alerts(m, n, c)
-    r = ai_struct(data_block(m, n, c, a)) or rules_struct(m)
-    return format_report(r, a, c, m), m
+    r = ai_struct(data_block(m, n, c, a)) or rules_struct(m, c)
+    return format_report(r, a, c, m, n), m
 
 
 def set_bot_commands():
@@ -444,7 +510,8 @@ def get_updates(offset):
 
 def handle_command(text, chat_id, state, m=None):
     cmd = (text or "").strip().split()[0].lower().split("@")[0]
-    if cmd not in ["/gold", "/path", "/alerts", "/on", "/off", "/status", "/help", "/start"]:
+    if cmd not in ["/gold", "/path", "/signal", "/alerts", "/on", "/off",
+                   "/status", "/help", "/start"]:
         return
 
     if cmd in ["/gold", "/start"]:
@@ -452,17 +519,32 @@ def handle_command(text, chat_id, state, m=None):
         send_telegram(report)
         log("responded", cmd)
 
-    elif cmd == "/path":
+    elif cmd in ["/path", "/signal"]:
         m = m or fetch_market()
-        r = ai_struct(data_block(m, fetch_news(), fetch_calendar(), [])) or rules_struct(m)
-        msg = (
-            "📈 <b>XAUUSD · SHORT-TERM PATH</b>\n\n"
-            f"🔴 <b>VERDICT</b>: {html.escape(r.get('VERDICT', 'NEUTRAL'))} · "
-            f"Conviction {html.escape(r.get('CONVICTION', '5'))}/10\n\n"
-            f"📈 <b>PATH</b>: {html.escape(r.get('PATH'))}\n\n"
-            f"🔁 <b>FLIP</b>: {html.escape(r.get('FLIP'))}\n\n"
-            "<i>Analysis only — not financial advice. Manage risk.</i>"
-        )
+        n = fetch_news()
+        c = fetch_calendar()
+        r = ai_struct(data_block(m, n, c, [])) or rules_struct(m, c)
+        if cmd == "/path":
+            msg = (
+                "🎯 <b>XAUUSD · DIRECTION + FIRST MOVE</b>\n\n"
+                f"{html.escape(r.get('VERDICT', 'NEUTRAL'))} · "
+                f"Conviction {html.escape(r.get('CONVICTION', '5'))}/10\n"
+                f"🕒 <b>WINDOW</b>: {html.escape(window_line())}\n\n"
+                f"🎯 <b>FIRST</b>: {html.escape(r.get('FIRST'))}\n"
+                f"↳ <b>THEN</b>: {html.escape(r.get('THEN'))}\n\n"
+                f"📅 <b>CATALYST</b>: {html.escape(r.get('CATALYST'))}\n"
+                f"🔁 <b>FLIP</b>: {html.escape(r.get('FLIP'))}\n\n"
+                "<i>Analysis only — not financial advice.</i>"
+            )
+        else:
+            msg = (
+                "⚗️ <b>XAUUSD · EXPERIMENTAL SIGNAL</b>\n\n"
+                f"{html.escape(r.get('SIGNAL'))}\n\n"
+                f"🕒 <b>WINDOW</b>: {html.escape(window_line())}\n"
+                f"🎯 <b>FIRST</b>: {html.escape(r.get('FIRST'))}\n\n"
+                "<i>Data-derived, not verified — forward-test only. "
+                "Not financial advice.</i>"
+            )
         send_telegram(msg)
         log("responded", cmd)
 
@@ -505,8 +587,9 @@ def handle_command(text, chat_id, state, m=None):
     elif cmd == "/help":
         send_telegram(
             "📋 <b>COMMANDS</b>\n\n"
-            "/gold — full summarized report\n"
-            "/path — short-term path call\n"
+            "/gold — hourly direction + first move + signal\n"
+            "/path — direction + where price goes first\n"
+            "/signal — experimental signal only\n"
             "/alerts — alert settings\n"
             "/on — turn RED alerts on\n"
             "/off — turn alerts off\n"
@@ -603,7 +686,7 @@ def send_scheduled_checkins(state, m, headlines, events):
             "🌅 Morning brief · 🇲🇦 <b>07:30</b>\n"
             "🗽 New York open nudge · 🇲🇦 <b>14:30</b>\n"
             "🌙 Evening wrap · 🇲🇦 <b>21:00</b>\n"
-            "⏱ Full report · every hour\n"
+            "⏱ Hourly: direction + time window + first target + signal\n"
             "🚨 RED news / gold drops · instantly\n\n"
             "You don't have to ask — I'll come to you. 🟡"
         )
