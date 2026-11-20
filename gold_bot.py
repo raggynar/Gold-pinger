@@ -39,7 +39,7 @@ RED_PATTERNS = [
 ]
 RED_RE = re.compile("|".join(RED_PATTERNS), re.IGNORECASE)
 
-COMMAND_VERSION = 2  # bump to re-register the Telegram command menu
+COMMAND_VERSION = 3  # bump to re-register the Telegram command menu
 
 DEFAULT_STATE = {
     "commands_version": 0,
@@ -53,6 +53,10 @@ DEFAULT_STATE = {
     "alerted_events": [],
     "sent_checkins": [],
     "checkins_intro_sent": False,
+    "market_notices": [],
+    "watch_high": None,
+    "watch_low": None,
+    "last_smart_alert": None,
 }
 
 BOT_COMMANDS = [
@@ -60,6 +64,7 @@ BOT_COMMANDS = [
     {"command": "path", "description": "Direction + where price goes first"},
     {"command": "signal", "description": "Experimental signal only"},
     {"command": "event", "description": "Next event: above/below forecast"},
+    {"command": "smart", "description": "Range/ATR context + break levels"},
     {"command": "alerts", "description": "Show alert settings"},
     {"command": "on", "description": "Turn RED alerts ON"},
     {"command": "off", "description": "Turn RED alerts OFF"},
@@ -73,9 +78,11 @@ def log(*args):
 
 
 MA_ZONE = None
+ET_ZONE = None
 try:
     from zoneinfo import ZoneInfo as _ZoneInfo
     MA_ZONE = _ZoneInfo("Africa/Casablanca")
+    ET_ZONE = _ZoneInfo("America/New_York")  # handles DST for market hours
 except Exception:
     pass
 
@@ -85,6 +92,20 @@ def ma_time(fmt="%d %b %Y · %H:%M"):
     if MA_ZONE:
         return dt.datetime.now(MA_ZONE).strftime(fmt)
     return dt.datetime.utcnow().strftime(fmt) + " (MA unavailable)"
+
+
+def market_status():
+    """XAUUSD market hours: Fri 17:00 ET close → Sun 18:00 ET reopen."""
+    now_et = (dt.datetime.now(ET_ZONE) if ET_ZONE
+              else dt.datetime.utcnow() - dt.timedelta(hours=4))
+    wd, hour = now_et.weekday(), now_et.hour + now_et.minute / 60.0
+    if wd == 4 and hour >= 17:
+        return False, "Closed — NY close / weekend begins"
+    if wd == 5:
+        return False, "Closed — weekend"
+    if wd == 6 and hour < 18:
+        return False, "Closed — weekend (reopens Sun 18:00 ET / 🇲🇦 22:00 MA approx)"
+    return True, "Open"
 
 
 def event_time_ma(date_txt, time_txt):
@@ -394,6 +415,76 @@ def scenario_block(ev):
     return "\n".join(lines)
 
 
+def smart_context(m):
+    """Hourly momentum + range position — tells you if fading the move is dangerous."""
+    price, prev, hi, lo, atr = (m.get("price"), m.get("prev"), m.get("high24"),
+                               m.get("low24"), m.get("atr"))
+    if not all([price, prev, hi, lo, atr]) or atr <= 0 or hi <= lo:
+        return None
+    rng = hi - lo
+    move = price - prev
+    mult = abs(move) / atr
+    pos = (price - lo) / rng * 100
+    loc = "near 24h HIGH" if pos > 75 else "near 24h LOW" if pos < 25 else "mid-range"
+    if mult >= 1.5:
+        tone = f"MOMENTUM BURST {move:+.2f} ({mult:.1f}× ATR) — don't fade it blindly"
+    elif pos > 75 or pos < 25:
+        tone = f"At range edge ({move:+.2f}) — watch for break or rejection"
+    else:
+        tone = f"Normal hourly move {move:+.2f} ({mult:.1f}× ATR) — no edge, wait"
+    return (f"📊 <b>SMART CONTEXT</b> · {tone}. "
+            f"24h range {rng:.2f} ({rng / atr:.1f}× ATR), price {pos:.0f}% of range, {loc}.")
+
+
+def detect_smart_moves(m, state):
+    """Instant alert when gold breaks the recent local high/low by ~0.5 ATR."""
+    price, atr = m.get("price"), m.get("atr") or 3.0
+    if price is None:
+        return []
+    hi, lo = state.get("watch_high"), state.get("watch_low")
+    if hi is None or lo is None:
+        state["watch_high"] = state["watch_low"] = price
+        return []
+    now = dt.datetime.now(dt.timezone.utc)
+    last = state.get("last_smart_alert")
+    cooled = True
+    if last:
+        try:
+            cooled = (now - dt.datetime.fromisoformat(last)).total_seconds() >= 3600
+        except Exception:
+            cooled = True
+    thr = max(atr * 0.5, 1.5)
+    alerts = []
+    if price > hi + thr:
+        if cooled:
+            alerts.append(
+                "🚀 <b>SMART WATCH · LOCAL BREAK</b>\n\n"
+                f"Gold cleared local high <b>{hi}</b> → <b>{price}</b> "
+                f"(+{price - hi:.2f}, ≈{(price - hi) / atr:.1f}× ATR).\n"
+                f"24h high {m.get('high24')} · ATR {atr}\n"
+                f"Extension watch <b>{round(price + atr, 2)}</b> · "
+                f"Retest of {hi} as support would confirm."
+            )
+            state["last_smart_alert"] = now.isoformat()
+        state["watch_high"] = price
+    elif price < lo - thr:
+        if cooled:
+            alerts.append(
+                "📉 <b>SMART WATCH · LOCAL BREAK</b>\n\n"
+                f"Gold broke local low <b>{lo}</b> → <b>{price}</b> "
+                f"(-{lo - price:.2f}, ≈{(lo - price) / atr:.1f}× ATR).\n"
+                f"24h low {m.get('low24')} · ATR {atr}\n"
+                f"Extension watch <b>{round(price - atr, 2)}</b> · "
+                f"Retest of {lo} as resistance would confirm."
+            )
+            state["last_smart_alert"] = now.isoformat()
+        state["watch_low"] = price
+    else:
+        state["watch_high"] = max(hi, price)
+        state["watch_low"] = min(lo, price)
+    return alerts
+
+
 def build_alerts(m, headlines, events):
     flags = []
     if m.get("price") is not None:
@@ -541,14 +632,24 @@ def format_report(r, alerts, calendar, m, headlines=None, event_objs=None,
 
     verdict = r.get("VERDICT", "NEUTRAL").upper()
     v_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(verdict, "⚪")
+    is_open, why = market_status()
     lines = [
         f"🟡 <b>{e(title)}</b> 🟡",
         "",
+    ]
+    if not is_open:
+        lines += [f"🔒 <b>MARKET CLOSED</b> — {e(why)} · levels below are the last close", ""]
+    lines += [
         f"{v_icon} <b>FUNDAMENTAL DIRECTION: {e(verdict)}</b> · Conviction {e(r.get('CONVICTION'))}/10",
         conviction_bar(r.get("CONVICTION")),
         f"⏱ {e(m['timestamp'])}  ·  🇲🇦 {e(ma_time())} MA",
         f"🕒 <b>WINDOW</b>: {e(window_line())}",
         f"💰 Gold {e(m.get('price'))} · 24h {e(m.get('low24'))}–{e(m.get('high24'))} · {e(m['source'])}",
+    ]
+    ctx = smart_context(m)
+    if ctx:
+        lines += [ctx]
+    lines += [
         "",
         f"🎯 <b>WHERE PRICE GOES FIRST</b>\n{e(r.get('FIRST'))}",
         f"↳ <b>THEN</b>: {e(r.get('THEN'))}",
@@ -647,8 +748,8 @@ def get_updates(offset):
 
 def handle_command(text, chat_id, state, m=None):
     cmd = (text or "").strip().split()[0].lower().split("@")[0]
-    if cmd not in ["/gold", "/path", "/signal", "/event", "/alerts", "/on",
-                   "/off", "/status", "/help", "/start"]:
+    if cmd not in ["/gold", "/path", "/signal", "/event", "/smart", "/alerts",
+                   "/on", "/off", "/status", "/help", "/start"]:
         return
 
     if cmd in ["/gold", "/start"]:
@@ -694,6 +795,20 @@ def handle_command(text, chat_id, state, m=None):
         send_telegram(msg)
         log("responded", cmd)
 
+    elif cmd == "/smart":
+        m = m or fetch_market()
+        ctx = smart_context(m) or "Not enough live data right now."
+        msg = (
+            "📊 <b>XAUUSD · SMART WATCH</b>\n\n" + ctx + "\n\n"
+            f"Local high: <b>{state.get('watch_high') or m.get('price')}</b> · "
+            f"Local low: <b>{state.get('watch_low') or m.get('price')}</b>\n"
+            "I ping you automatically when gold clears either one by ~0.5 ATR "
+            "(max once an hour).\n\n"
+            "<i>Data-derived context — not financial advice.</i>"
+        )
+        send_telegram(msg)
+        log("responded", cmd)
+
     elif cmd == "/alerts":
         status = "🟢 ON" if state.get("alerts_enabled") else "🔴 OFF"
         send_telegram(
@@ -723,7 +838,8 @@ def handle_command(text, chat_id, state, m=None):
             sched_ma = "08:07"
         send_telegram(
             "🤖 <b>BOT STATUS</b>\n\n"
-            f"✅ Online · hourly report at :07 UTC / {sched_ma} MA\n"
+            f"✅ Online · hourly report at :07 UTC / {sched_ma} MA (market hours only)\n"
+            f"📈 Market: {'OPEN' if market_status()[0] else 'CLOSED — weekend'}\n"
             f"🕒 Now: 🇲🇦 {ma_time()} MA\n"
             f"👀 Last watch: {html.escape(last)}\n"
             f"💰 Gold: {price}\n"
@@ -737,6 +853,7 @@ def handle_command(text, chat_id, state, m=None):
             "/path — direction + where price goes first\n"
             "/signal — experimental signal only\n"
             "/event — next event: if above/below forecast\n"
+            "/smart — range/ATR context + break levels\n"
             "/alerts — alert settings\n"
             "/on — turn RED alerts on\n"
             "/off — turn alerts off\n"
@@ -889,9 +1006,46 @@ def send_scheduled_checkins(state, m, headlines, events, event_objs=None):
     state["sent_checkins"] = list(sent)[-30:]
 
 
+def send_market_notices(state):
+    """One Friday-close notice and one Sunday-reopen notice. No weekend spam."""
+    is_open, why = market_status()
+    now = dt.datetime.now(dt.timezone.utc)
+    day = now.strftime("%Y-%m-%d")
+    notices = state.setdefault("market_notices", [])
+    if not is_open:
+        key = day + "-closed"
+        if key not in notices:
+            text = (
+                "🔒 <b>MARKET CLOSED — WEEKEND</b>\n\n"
+                f"{html.escape(why)}\n"
+                "No hourly direction while gold isn't trading. "
+                "RED news alerts stay on.\n\n"
+                "I'll come back with the next report when the market reopens. 🟡"
+            )
+            if send_telegram(text):
+                notices.append(key)
+                log("sent market-closed notice")
+    else:
+        key = day + "-open"
+        if key not in notices and now.weekday() in (5, 6):
+            text = (
+                "🔓 <b>MARKET REOPENED</b>\n\n"
+                "Gold is trading again. Hourly direction + event scenarios resume "
+                "at the next :07. 🟡"
+            )
+            if send_telegram(text):
+                notices.append(key)
+                log("sent market-open notice")
+    state["market_notices"] = notices[-10:]
+
+
 def send_hourly_report(state, force=False):
     """Send the hourly report, deduped so watch + cron can't double-post."""
     now = dt.datetime.now(dt.timezone.utc)
+    is_open, why = market_status()
+    if not is_open and not force:
+        log("hourly report skipped - market closed:", why)
+        return False
     last = state.get("last_report")
     if not force and last:
         try:
@@ -928,6 +1082,8 @@ def run_watch():
         handle_command(text, chat_id, state)
         state["last_update_id"] = max(state.get("last_update_id", 0), update_id + 1)
 
+    send_market_notices(state)
+
     m = fetch_market()
     headlines = fetch_news()
     ev_objs = fetch_calendar_events()
@@ -940,6 +1096,10 @@ def run_watch():
         for alert in detect_upcoming_events(c, state, ev_objs):
             send_telegram(alert)
             log("sent EVENT alert")
+        if market_status()[0]:
+            for alert in detect_smart_moves(m, state):
+                send_telegram(alert)
+                log("sent SMART WATCH alert")
 
     # The fast watcher drives the hourly report so no long-running job blocks GitHub.
     if dt.datetime.now(dt.timezone.utc).minute >= 7:

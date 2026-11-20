@@ -24,6 +24,7 @@ Repo: `https://github.com/raggynar/Gold-pinger`
    - 🎯 **Where price goes FIRST** — one concrete level taken from real 24h high/low/range data
    - ↳ THEN follow-through · 📌 Why (macro only — Fed, dollar, yields, geopolitics)
    - ⚖️ Against · 📅 Nearest RED catalyst
+   - 📊 **SMART CONTEXT** — hourly move vs ATR (momentum burst / range edge / no edge) + position in range
    - 🧭 **EVENT SCENARIO MAP** — forecast/previous + "if below / if above / if in line" for gold
    - ⚗️ Experimental signal (zone / invalidation / target) · 🔁 Flip trigger
    - 🚨 RED NEWS WATCH · ⚠️ Active alerts · 🗓 High + **Medium** impact USD events with GMT **and 🇲🇦 Morocco** time
@@ -39,6 +40,7 @@ Repo: `https://github.com/raggynar/Gold-pinger`
 | `/path` | Direction + where price goes first |
 | `/signal` | Experimental signal only |
 | `/event` | Next USD event with above/below-forecast scenarios |
+| `/smart` | Range/ATR context + local break levels |
 | `/alerts` | Show alert settings |
 | `/on` / `/off` | Turn RED alerts on/off |
 | `/status` | Bot health + last check + gold price |
@@ -54,6 +56,22 @@ Repo: `https://github.com/raggynar/Gold-pinger`
 - `state.json` — remembers commands, headlines, price, alert toggle, last report time, alerted events.
 - Free data: Yahoo Finance, Google News RSS, ForexFactory XML. Free AI: Groq (`openai/gpt-oss-120b`).
   If Groq fails, a clearly-labeled data-only report is sent instead — never a fake one.
+
+## Market hours — no weekend spam
+
+Hourly direction reports are **suppressed when XAUUSD is closed** (Friday 17:00 New York →
+Sunday 18:00 New York, DST handled automatically). You get **one** "market closed" notice and
+**one** "reopened" notice, then silence until trading resumes. RED news alerts still fire on
+weekends because geopolitical headlines can move the Sunday open. Manual commands still work
+but are labeled "levels are last close".
+
+## Smart watch (new)
+
+- 📊 **SMART CONTEXT** in every hourly report: hourly move measured in ATRs, whether it's a
+  momentum burst (don't fade blindly), at a range edge (break or rejection), or no edge (wait).
+- 🚀 **Instant LOCAL BREAK alerts**: when gold clears the tracked local high/low by ~0.5 ATR,
+  you get the break size in ATRs, the 24h reference level, an extension target (price ± 1 ATR),
+  and the retest level that would confirm. Max one alert per hour to avoid spam.
 
 ## Honest limits (free tier)
 
