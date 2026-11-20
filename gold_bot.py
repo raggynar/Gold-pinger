@@ -395,6 +395,15 @@ def rules_struct(m, events=None):
     }
 
 
+def ensure_fields(r, m, events=None):
+    """Fill any line the AI omitted with a data-derived fallback."""
+    base = rules_struct(m, events)
+    for key in base:
+        if not r.get(key):
+            r[key] = base[key]
+    return r
+
+
 def conviction_bar(value):
     try:
         n = max(0, min(10, int(float(value))))
@@ -475,7 +484,7 @@ def build_report():
     n = fetch_news()
     c = fetch_calendar()
     a = build_alerts(m, n, c)
-    r = ai_struct(data_block(m, n, c, a)) or rules_struct(m, c)
+    r = ensure_fields(ai_struct(data_block(m, n, c, a)) or {}, m, c)
     return format_report(r, a, c, m, n), m
 
 
@@ -523,7 +532,7 @@ def handle_command(text, chat_id, state, m=None):
         m = m or fetch_market()
         n = fetch_news()
         c = fetch_calendar()
-        r = ai_struct(data_block(m, n, c, [])) or rules_struct(m, c)
+        r = ensure_fields(ai_struct(data_block(m, n, c, [])) or {}, m, c)
         if cmd == "/path":
             msg = (
                 "🎯 <b>XAUUSD · DIRECTION + FIRST MOVE</b>\n\n"
