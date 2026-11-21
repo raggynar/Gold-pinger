@@ -2,14 +2,14 @@
   "commands_version": 3,
   "last_update_id": 563341858,
   "seen_headlines": [
-    "Gold Set for Worst Week Since March on Hawkish Fed, AI Selloff - Bloomberg.com",
-    "Cargo ship bound for Russia's Kaliningrad hit by drones, Finland tightens security - Reuters",
-    "Fed's Cook says rate hikes needed to lower high inflation - Reuters",
     "Canada sees little US movement on tariff relief, sources say - Reuters",
-    "Riyadh\u2019s tallest skyscraper hit in Houthi strike on Saudi wealth fund HQ - Reuters",
-    "Dollar extends rally as risk appetite fades - Reuters",
+    "Cargo ship bound for Russia's Kaliningrad hit by drones, Finland tightens security - Reuters",
     "US Vice President Vance declines to say he would have ordered Iran strikes - Reuters",
     "Oil settles flat as Hormuz disruptions offset global surplus fears - Reuters",
+    "Riyadh\u2019s tallest skyscraper hit in Houthi strike on Saudi wealth fund HQ - Reuters",
+    "Gold Set for Worst Week Since March on Hawkish Fed, AI Selloff - Bloomberg.com",
+    "Dollar extends rally as risk appetite fades - Reuters",
+    "Fed's Cook says rate hikes needed to lower high inflation - Reuters",
     "Araqchi says Iran wants diplomacy to end war, Trump says terms unacceptable - Reuters",
     "Congress struggles to avert US shutdown as Iran war divides lawmakers - Reuters"
   ],
@@ -18,7 +18,7 @@
   "seen_ff_red": [],
   "alerts_enabled": true,
   "commands_set": true,
-  "last_watch": "15:01 UTC / 15:01 MA",
+  "last_watch": "15:02 UTC / 15:02 MA",
   "last_report": "2026-11-20T22:30:53.755704+00:00",
   "alerted_events": [
     "\ud83d\udfe0 MED \u00b7 11-20-2026 3:00pm GMT  |  \ud83c\uddf2\ud83c\udde6 11-20 15:00 MA \u2014 Revised UoM Consumer Sentiment",
