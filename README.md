@@ -28,9 +28,9 @@ Repo: `https://github.com/raggynar/Gold-pinger`
    - 🧭 **EVENT SCENARIO MAP** — forecast/previous + "if below / if above / if in line" for gold
    - ⚗️ Experimental signal (zone / invalidation / target) · 🔁 Flip trigger
    - 🚨 RED NEWS WATCH · ⚠️ Active alerts · 🗓 High + **Medium** impact USD events with GMT **and 🇲🇦 Morocco** time
-3. **RED news + event alerts** — the watcher checks every ~90 seconds and pings you when:
-   - A **new high-impact headline** appears (CPI, PPI, PCE, NFP, Fed, war, tariffs, etc.)
-   - **Gold drops ≥0.6%** between checks (or pumps up)
+3. **RED event + news alerts** — the watcher checks every ~90 seconds and pings you when:
+   - A **new 🔴 HIGH-impact ForexFactory event** appears (Google News keyword RED is fallback only)
+   - ❌ **No gold pump/dump price alerts** — removed as spam; no price-move alerts at all
    - An event is **~15 minutes away** — ⏰ pre-event heads-up **with the full above/below scenario map**
 4. **Commands** — message your bot (menu also shows in Telegram):
 

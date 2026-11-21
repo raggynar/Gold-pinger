@@ -3,7 +3,7 @@
 
 MODES (run as: python gold_bot.py <mode>):
   report        - full summarized report (hourly workflow)
-  watch         - poll Telegram commands + detect NEW red news / gold drops (5-min workflow)
+  watch         - poll Telegram commands + detect NEW ForexFactory RED events (5-min workflow)
   setcommands   - register the Telegram command menu (one-off)
 
 Secrets (GitHub Actions -> Settings -> Secrets -> Actions):
@@ -46,6 +46,7 @@ DEFAULT_STATE = {
     "last_update_id": 0,
     "seen_headlines": [],
     "last_price": None,
+    "seen_ff_red": [],
     "alerts_enabled": True,
     "commands_set": False,
     "last_watch": None,
@@ -142,9 +143,15 @@ def window_line():
             f"({session} session)")
 
 
+def is_ff_red(h):
+    return str(h or "").startswith("🔴 ")
+
+
 def red_headlines(headlines):
-    """Only the headlines that actually match a high-impact keyword."""
-    return [h for h in (headlines or []) if RED_RE.search(h)]
+    """FF high-impact items are already red; Google items need keyword matching."""
+    hs = headlines or []
+    ff = [h for h in hs if is_ff_red(h)]
+    return ff if ff else [h for h in hs if RED_RE.search(h)]
 
 
 def load_state():
@@ -239,7 +246,51 @@ def fetch_market():
     return m
 
 
+def fetch_ff_red_news():
+    """ForexFactory's public calendar feed — HIGH impact ('red folder') events.
+    The FF news page is Cloudflare-protected, so this is the reliable FF source."""
+    items = []
+    try:
+        r = requests.get(
+            "https://nfs.faireconomy.media/ff_calendar_thisweek.xml",
+            timeout=20, headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if b"weeklyevents" not in r.content:
+            return []
+        root = ET.fromstring(r.content)
+        now = dt.datetime.now(dt.timezone.utc)
+        for ev in root.findall(".//event"):
+            if (ev.findtext("impact") or "").strip().lower() != "high":
+                continue
+            date_txt = (ev.findtext("date") or "").strip()
+            time_txt = (ev.findtext("time") or "").strip()
+            title = (ev.findtext("title") or "").strip()
+            country = (ev.findtext("country") or "").upper()
+            if not title or not date_txt:
+                continue
+            when = event_gmt_datetime(date_txt, time_txt)
+            if when and when < now - dt.timedelta(hours=2):
+                continue
+            ma = event_time_ma(date_txt, time_txt)
+            fc = (ev.findtext("forecast") or "").strip()
+            txt = f"🔴 {country} · {date_txt} {time_txt} GMT"
+            if ma:
+                txt += f" | 🇲🇦 {ma} MA"
+            txt += f" — {title}"
+            if fc and fc != "n/a":
+                txt += f" (forecast {fc})"
+            items.append(txt)
+        return list(dict.fromkeys(items))[:12]
+    except Exception as exc:
+        log("ff red news failed", exc)
+        return []
+
+
 def fetch_news():
+    """RED news from ForexFactory first; Google News only as a fallback."""
+    ff = fetch_ff_red_news()
+    if ff:
+        return ff
     query = (
         "gold price OR Federal Reserve OR CPI OR PPI OR inflation OR dollar "
         "OR Treasury yields OR central bank OR war when:1d"
@@ -506,7 +557,7 @@ def build_alerts(m, headlines, events):
             flags.append("High-impact news keyword")
             break
     if events:
-        flags.append("High-impact USD event this week")
+        flags.append("ForexFactory RED events on feed")
     return list(dict.fromkeys(flags))
 
 
@@ -813,14 +864,14 @@ def handle_command(text, chat_id, state, m=None):
         status = "🟢 ON" if state.get("alerts_enabled") else "🔴 OFF"
         send_telegram(
             "⚙️ <b>ALERT SETTINGS</b>\n\n"
-            f"RED news + gold moves: <b>{status}</b>\n"
+            f"ForexFactory RED events: <b>{status}</b>\n"
             "Checks every ~20 seconds.\n\n"
             "Use /on or /off to toggle."
         )
 
     elif cmd == "/on":
         state["alerts_enabled"] = True
-        send_telegram("🟢 <b>ALERTS ON</b> — I'll ping you on new RED news or sharp gold moves.")
+        send_telegram("🟢 <b>ALERTS ON</b> — I'll ping you on new ForexFactory RED events.")
 
     elif cmd == "/off":
         state["alerts_enabled"] = False
@@ -865,45 +916,46 @@ def handle_command(text, chat_id, state, m=None):
 
 
 def detect_new_red(m, headlines, state, market_open=True):
+    """New HIGH-impact items from ForexFactory (or keyword RED from Google fallback).
+    Gold pump/dump price alerts are permanently disabled."""
     alerts = []
-    seen = set(state.get("seen_headlines", []))
-
-    if not seen:
-        state["seen_headlines"] = list(headlines)[:30]
-    else:
-        for h in headlines:
-            if h in seen:
-                continue
-            seen.add(h)
-            if RED_RE.search(h):
+    if any(is_ff_red(h) for h in (headlines or [])):
+        seen = set(state.get("seen_ff_red", []))
+        if not seen:
+            state["seen_ff_red"] = list(headlines)[:40]
+        else:
+            for h in headlines:
+                if h in seen:
+                    continue
+                seen.add(h)
                 alerts.append(
-                    "🚨 <b>NEW RED NEWS</b> 🚨\n\n" + html.escape(h)
-                    + (f"\n\n💰 Gold: {m.get('price')}" if market_open else
-                       "\n\n🔒 Market closed — headline only, no price move.")
+                    "🚨 <b>NEW RED EVENT · FOREX FACTORY</b> 🚨\n\n" + html.escape(h)
+                    + ("\n\nUse /event for the above/below-forecast scenario."
+                       if market_open else
+                       "\n\n🔒 Market closed — event only, no price move.")
                 )
-        state["seen_headlines"] = list(seen)[-30:]
+            state["seen_ff_red"] = list(seen)[-40:]
+    else:
+        seen = set(state.get("seen_headlines", []))
+        if not seen:
+            state["seen_headlines"] = list(headlines)[:30]
+        else:
+            for h in headlines:
+                if h in seen:
+                    continue
+                seen.add(h)
+                if RED_RE.search(h):
+                    alerts.append(
+                        "🚨 <b>NEW RED NEWS</b> 🚨\n\n" + html.escape(h)
+                        + (f"\n\n💰 Gold: {m.get('price')}" if market_open else
+                           "\n\n🔒 Market closed — headline only.")
+                    )
+            state["seen_headlines"] = list(seen)[-30:]
 
-    price, last = m.get("price"), state.get("last_price")
-    # Never send price-move alerts while gold isn't trading. Clear the baseline
-    # so the first check after reopen can't fire a fake gap alert.
     if not market_open:
         state["last_price"] = None
-        return alerts
-    if price and last:
-        change = (price - last) / last * 100
-        if change <= -0.6:
-            alerts.append(
-                "📉 <b>GOLD DROP</b> 📉\n\n"
-                f"Down <b>{change:.2f}%</b> since last check → <b>{price}</b>\n"
-                f"DXY: {m.get('dxy')} · 10Y: {m.get('us10y')}"
-            )
-        elif change >= 0.6:
-            alerts.append(
-                "🚀 <b>GOLD PUMP</b> 🚀\n\n"
-                f"Up <b>+{change:.2f}%</b> since last check → <b>{price}</b>"
-            )
-    if price:
-        state["last_price"] = price
+    elif m.get("price"):
+        state["last_price"] = m["price"]
     return alerts
 
 
@@ -963,7 +1015,7 @@ def send_scheduled_checkins(state, m, headlines, events, event_objs=None):
             "🗽 New York open nudge · 🇲🇦 <b>14:30</b>\n"
             "🌙 Evening wrap · 🇲🇦 <b>21:00</b>\n"
             "⏱ Hourly: direction + time window + first target + signal\n"
-            "🚨 RED news / gold drops · instantly\n\n"
+            "🚨 ForexFactory RED events · instantly\n\n"
             "You don't have to ask — I'll come to you. 🟡"
         )
         if send_telegram(intro):
