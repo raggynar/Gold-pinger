@@ -859,11 +859,12 @@ def handle_command(text, chat_id, state, m=None):
             "/off — turn alerts off\n"
             "/status — bot status\n"
             "/help — this list\n\n"
-            "I also ping hourly and on new RED news / gold drops."
+            "Hourly reports + gold alerts run only while the market is open. "
+            "RED news pings any time."
         )
 
 
-def detect_new_red(m, headlines, state):
+def detect_new_red(m, headlines, state, market_open=True):
     alerts = []
     seen = set(state.get("seen_headlines", []))
 
@@ -877,11 +878,17 @@ def detect_new_red(m, headlines, state):
             if RED_RE.search(h):
                 alerts.append(
                     "🚨 <b>NEW RED NEWS</b> 🚨\n\n" + html.escape(h)
-                    + f"\n\n💰 Gold: {m.get('price')}"
+                    + (f"\n\n💰 Gold: {m.get('price')}" if market_open else
+                       "\n\n🔒 Market closed — headline only, no price move.")
                 )
         state["seen_headlines"] = list(seen)[-30:]
 
     price, last = m.get("price"), state.get("last_price")
+    # Never send price-move alerts while gold isn't trading. Clear the baseline
+    # so the first check after reopen can't fire a fake gap alert.
+    if not market_open:
+        state["last_price"] = None
+        return alerts
     if price and last:
         change = (price - last) / last * 100
         if change <= -0.6:
@@ -942,6 +949,9 @@ CHECKIN_TIMES = [
 
 def send_scheduled_checkins(state, m, headlines, events, event_objs=None):
     """Proactive 'speaks first' messages, once per day each, in Morocco time."""
+    if not market_status()[0]:
+        log("check-ins skipped - market closed")
+        return
     now = dt.datetime.now(MA_ZONE) if MA_ZONE else dt.datetime.utcnow()
     sent = set(state.get("sent_checkins", []))
     price = m.get("price")
@@ -1035,6 +1045,8 @@ def send_market_notices(state):
             )
             if send_telegram(text):
                 notices.append(key)
+                state["last_price"] = None
+                state["watch_high"] = state["watch_low"] = None
                 log("sent market-open notice")
     state["market_notices"] = notices[-10:]
 
@@ -1089,14 +1101,15 @@ def run_watch():
     ev_objs = fetch_calendar_events()
     c = [e["label"] for e in ev_objs]
 
+    is_open, _ = market_status()
     if state.get("alerts_enabled", True):
-        for alert in detect_new_red(m, headlines, state):
+        for alert in detect_new_red(m, headlines, state, is_open):
             send_telegram(alert)
             log("sent RED alert")
-        for alert in detect_upcoming_events(c, state, ev_objs):
-            send_telegram(alert)
-            log("sent EVENT alert")
-        if market_status()[0]:
+        if is_open:
+            for alert in detect_upcoming_events(c, state, ev_objs):
+                send_telegram(alert)
+                log("sent EVENT alert")
             for alert in detect_smart_moves(m, state):
                 send_telegram(alert)
                 log("sent SMART WATCH alert")
