@@ -45,9 +45,13 @@ BREAKING_PATTERNS = [
     r"\bwar\b", r"\battack", r"\bstrike", r"\bmissile", r"\bstatement\b",
     r"\bsanction", r"\btariff", r"\bceasefire\b", r"\binvasion\b",
     r"\bdrone\b", r"\bbomb", r"\bthreat", r"\bwarn", r"\bdeclar",
+    r"\bhawkish\b", r"\bdovish\b", r"rate hikes?", r"rate cuts?",
+    r"interest rates?", r"\bdollar\b", r"\bgold\b", r"\bfed\b", r"\bpowell\b",
+    r"\binflation\b", r"\bcpi\b", r"\bnfp\b",
 ]
 BREAKING_RE = re.compile("|".join(BREAKING_PATTERNS), re.IGNORECASE)
-BREAKING_FEED_VERSION = 1  # bump to silently reseed when the query/filter changes
+BREAKING_FEED_VERSION = 2  # bump to silently reseed when the query/filter changes
+MAX_IMPACTS_PER_CHECK = 3  # avoid a burst of Groq calls / messages in one tick
 
 COMMAND_VERSION = 3  # bump to re-register the Telegram command menu
 
@@ -295,7 +299,9 @@ def fetch_news():
     """BREAKING headlines (war / statements / Fed / geopolitics) from Google News.
     The economic calendar is a separate channel: fetch_ff_red_news()."""
     query = (
-        '"war" OR "attack" OR "missile" OR "statement" '
+        '"war" OR "attack" OR "missile" OR "statement" OR "tariff" '
+        'OR "US dollar" OR "hawkish" OR "dovish" OR "rate hikes" '
+        'OR "rate cuts" OR "interest rates" '
         '(Reuters OR "AP News" OR Bloomberg OR "BBC News") when:1d'
     )
     url = (
@@ -628,6 +634,74 @@ DATA:
         return None
 
 
+def _rule_impact(headline):
+    """Deterministic fallback if Groq is unavailable — no invented numbers."""
+    t = (headline or "").lower()
+    bull = any(k in t for k in [
+        "war", "attack", "missile", "strike", "invasion", "bomb", "drone",
+        "safe haven", "risk-off", "dovish", "rate cut", "cuts rates",
+        "lower rates", "lower interest", "cut interest", "urges fed to lower",
+        "stimulus", "crisis", "shutdown",
+    ])
+    bear = any(k in t for k in [
+        "hawkish", "rate hike", "hikes", "higher rates", "strong dollar",
+        "ceasefire", "peace", "de-escalation", "risk-on", "yields rise",
+        "hot inflation", "higher for longer",
+    ])
+    if bull and not bear:
+        return "BULLISH", "5", "Risk-off / dovish tone supports safe-haven demand.", "DOWN"
+    if bear and not bull:
+        return "BEARISH", "5", "Hawkish / risk-on tone drains safe-haven demand.", "UP"
+    return "NEUTRAL", "3", "Mixed signals — no clear gold direction yet.", "MIXED"
+
+
+def gold_impact(headline):
+    """Short gold + dollar impact note for one breaking headline. Never invents levels."""
+    gold, conf, why, dollar = _rule_impact(headline)
+    if GROQ:
+        prompt = (
+            "You are a professional XAUUSD macro analyst. For the news headline below, "
+            "state the immediate directional impact on gold (XAUUSD) and the US dollar. "
+            "Use general market logic only. NEVER invent prices, numbers or chart levels. "
+            "Output EXACTLY 4 plain lines, no markdown, with these prefixes:\n"
+            "GOLD: <BULLISH or BEARISH or NEUTRAL>\n"
+            "CONF: <integer 1-10>\n"
+            "WHY: <one short sentence, max 20 words>\n"
+            "DOLLAR: <UP or DOWN or MIXED> - <one short reason, max 10 words>\n\n"
+            f"HEADLINE: {headline}\n"
+        )
+        try:
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ}", "Content-Type": "application/json"},
+                json={
+                    "model": "openai/gpt-oss-120b",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2,
+                    "max_tokens": 250,
+                    "reasoning_effort": "low",
+                },
+                timeout=25,
+            )
+            r.raise_for_status()
+            text = r.json()["choices"][0]["message"]["content"]
+            def grab(key):
+                m = re.search(rf"^{key}:\s*(.+)$", text, re.MULTILINE | re.IGNORECASE)
+                return m.group(1).strip() if m else ""
+            g, c, w, d = grab("GOLD").upper(), grab("CONF"), grab("WHY"), grab("DOLLAR")
+            if any(x in g for x in ("BULLISH", "BEARISH", "NEUTRAL")) and w and d:
+                gold = "BULLISH" if "BULLISH" in g else ("BEARISH" if "BEARISH" in g else "NEUTRAL")
+                conf, why, dollar = c or conf, w, d
+        except Exception as exc:
+            log("gold impact Groq failed", exc)
+    emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(gold, "⚪")
+    return (
+        f"\n\n💹 <b>GOLD IMPACT: {emoji} {gold}</b> · {conf}/10\n"
+        f"Why: {html.escape(why)}\n"
+        f"💵 Dollar: {html.escape(dollar)}"
+    )
+
+
 def rules_struct(m, events=None):
     price, rsi_val, sma20 = m.get("price"), m.get("rsi"), m.get("sma20")
     hi, lo, mid = m.get("high24"), m.get("low24"), m.get("range_mid")
@@ -875,8 +949,8 @@ def handle_command(text, chat_id, state, m=None):
     elif cmd == "/on":
         state["alerts_enabled"] = True
         send_telegram(
-            "🟢 <b>ALERTS ON</b> — I'll ping you on new breaking news "
-            "(war / statements) + ForexFactory 🔴 RED calendar events."
+            "🟢 <b>ALERTS ON</b> — new breaking news (war / Trump / Fed statements) "
+            "with gold + dollar impact, plus ForexFactory 🔴 RED calendar events."
         )
 
     elif cmd == "/off":
@@ -917,8 +991,8 @@ def handle_command(text, chat_id, state, m=None):
             "/status — bot status\n"
             "/help — this list\n\n"
             "Hourly reports run only while the market is open. "
-            "Breaking news (war / statements) pings any time; "
-            "FF RED calendar events ping when published."
+            "Breaking news (war / Trump / Fed statements) pings any time — "
+            "each with gold + dollar impact. FF RED calendar events ping when published."
         )
 
 
@@ -932,16 +1006,24 @@ def detect_new_breaking_news(m, headlines, state, market_open=True):
         state["seen_headlines"] = list(headlines)[:30]
         state["breaking_feed_version"] = BREAKING_FEED_VERSION
     else:
+        alerted = 0
         for h in headlines:
             if h in seen:
                 continue
+            if not BREAKING_RE.search(h):
+                seen.add(h)  # irrelevant noise: mark handled, no alert
+                continue
+            if alerted >= MAX_IMPACTS_PER_CHECK:
+                continue     # leave unseen so it gets a full impact note next tick
+            impact = gold_impact(h)
+            alerted += 1
             seen.add(h)
-            if BREAKING_RE.search(h):
-                alerts.append(
-                    "🚨 <b>BREAKING NEWS</b> 🚨\n\n" + html.escape(h)
-                    + (f"\n\n💰 Gold: {m.get('price')}" if market_open else
-                       "\n\n🔒 Market closed — headline only, no price move.")
-                )
+            alerts.append(
+                "🚨 <b>BREAKING NEWS</b> 🚨\n\n" + html.escape(h)
+                + (f"\n\n💰 Gold: {m.get('price')}" if market_open else
+                   "\n\n🔒 Market closed — price frozen.")
+                + impact
+            )
         state["seen_headlines"] = list(seen)[-30:]
 
     if not market_open:
@@ -1028,7 +1110,7 @@ def send_scheduled_checkins(state, m, headlines, events, event_objs=None):
             "🗽 New York open nudge · 🇲🇦 <b>14:30</b>\n"
             "🌙 Evening wrap · 🇲🇦 <b>21:00</b>\n"
             "⏱ Hourly: direction + time window + first target + signal\n"
-            "🚨 Breaking news + FF RED calendar events · instantly\n\n"
+            "🚨 Breaking news (with gold impact) + FF RED events · instantly\n\n"
             "You don't have to ask — I'll come to you. 🟡"
         )
         if send_telegram(intro):

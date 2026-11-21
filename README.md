@@ -30,7 +30,7 @@ Repo: `https://github.com/raggynar/Gold-pinger`
    - 🚨 RED NEWS WATCH · ⚠️ Active alerts · 🗓 High + **Medium** impact USD events with GMT **and 🇲🇦 Morocco** time
 3. **Two separate RED channels** — the watcher checks every ~90 seconds and pings you when:
    - 🗓 **CALENDAR** — a new 🔴 HIGH-impact ForexFactory event appears (CPI, NFP, Fed, etc.)
-   - 📰 **BREAKING NEWS** — a new headline drops (war, statements, attacks, tariffs) — Google News, 24/7
+   - 📰 **BREAKING NEWS** — a new headline drops (war, attacks, **Trump / Fed / dollar statements**, tariffs) — Google News, 24/7, **each with a gold + dollar impact line** (BULLISH/BEARISH/NEUTRAL, confidence, why)
    - ❌ **No gold pump/dump price alerts** — removed as spam; no price-move alerts at all
    - An event is **~15 minutes away** — ⏰ pre-event heads-up **with the full above/below scenario map**
 4. **Commands** — message your bot (menu also shows in Telegram):
